@@ -1,8 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 
-// Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyAecwgL1eJHcbOTAJuAkahf_uWcDN5FNUc",
   authDomain: "cleaning-schedule-4c327.firebaseapp.com",
@@ -28,6 +27,13 @@ async function dbSet(key, value) {
     await setDoc(doc(db, "schedule", key), { value });
     return { value };
   } catch (_) { return null; }
+}
+
+function dbListen(key, callback) {
+  return onSnapshot(doc(db, "schedule", key), (snap) => {
+    if (snap.exists()) callback({ value: snap.data().value });
+    else callback(null);
+  }, () => {});
 }
 
 const FAMILY = [
@@ -250,6 +256,9 @@ export default function CleaningSchedule() {
   const [periodData, setPeriodData] = useState(null);
   const [loadingPeriod, setLoadingPeriod] = useState(false);
 
+  // Track whether we're the one writing, to avoid feedback loops
+  const writingRef = useRef(false);
+
   const fm = freqMeta[activeFreq];
 
   const archivePeriod = useCallback(async (periodKey, data) => {
@@ -277,28 +286,50 @@ export default function CleaningSchedule() {
     return live;
   }, [archivePeriod]);
 
+  // ── Real-time listener for completions ───────────────────────────────────
   useEffect(() => {
-    async function load() {
-      try {
-        const r1 = await dbGet("completions");
-        if (r1?.value) { const pruned = await pruneAndArchive(JSON.parse(r1.value)); setCompletions(pruned); }
-        const r2 = await dbGet("customTasks");
-        if (r2?.value) setCustomTasks(JSON.parse(r2.value));
-      } catch (_) {}
+    let initialized = false;
+    const unsub = dbListen("completions", async (result) => {
+      if (writingRef.current) return; // skip echo of our own writes
+      if (result?.value) {
+        const raw = JSON.parse(result.value);
+        if (!initialized) {
+          initialized = true;
+          const pruned = await pruneAndArchive(raw);
+          setCompletions(pruned);
+        } else {
+          setCompletions(raw);
+        }
+      } else {
+        initialized = true;
+      }
       setLoading(false);
-    }
-    load();
+    });
+    return () => unsub();
   }, [pruneAndArchive]);
 
-  useEffect(() => { if (loading) return; dbSet("completions", JSON.stringify(completions)); }, [completions, loading]);
-  useEffect(() => { if (loading) return; dbSet("customTasks", JSON.stringify(customTasks)); }, [customTasks, loading]);
-
+  // ── Real-time listener for customTasks ───────────────────────────────────
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCompletions(prev => { pruneAndArchive(prev).then(live => setCompletions(live)); return prev; });
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [pruneAndArchive]);
+    const unsub = dbListen("customTasks", (result) => {
+      if (writingRef.current) return;
+      if (result?.value) setCustomTasks(JSON.parse(result.value));
+    });
+    return () => unsub();
+  }, []);
+
+  // ── Save completions when changed locally ────────────────────────────────
+  const saveCompletions = useCallback(async (data) => {
+    writingRef.current = true;
+    await dbSet("completions", JSON.stringify(data));
+    setTimeout(() => { writingRef.current = false; }, 500);
+  }, []);
+
+  // ── Save customTasks when changed locally ────────────────────────────────
+  const saveCustomTasks = useCallback(async (data) => {
+    writingRef.current = true;
+    await dbSet("customTasks", JSON.stringify(data));
+    setTimeout(() => { writingRef.current = false; }, 500);
+  }, []);
 
   function getTaskList(roomId, freq) {
     if (customTasks[roomId]?.[freq] !== undefined) return customTasks[roomId][freq];
@@ -320,6 +351,7 @@ export default function CleaningSchedule() {
       const next = { ...prev };
       if (next[key]) delete next[key];
       else next[key] = { by: activeMember.id, name: activeMember.name, color: activeMember.color, at: Date.now(), freq, periodKey: getPeriodKey(freq) };
+      saveCompletions(next);
       return next;
     });
   };
@@ -488,8 +520,7 @@ export default function CleaningSchedule() {
                       return (
                         <div key={room.id} style={{ marginBottom: 8, borderRadius: 10, overflow: "hidden", border: "1px solid #E4E0D8" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#fff" }}>
-                            <RoomIcon icon={room.icon} size={17} />
-                            <span style={{ fontSize: 13, fontWeight: "bold" }}>{room.name}</span>
+                            <RoomIcon icon={room.icon} size={17} /><span style={{ fontSize: 13, fontWeight: "bold" }}>{room.name}</span>
                             <span style={{ fontSize: 11, color: "#6DB894", marginLeft: "auto" }}>{roomItems.length} done</span>
                           </div>
                           <div style={{ borderTop: "1px solid #ECEAE4", background: "#FAFAF8" }}>
@@ -552,7 +583,6 @@ export default function CleaningSchedule() {
               ))}
             </div>
           </div>
-
           {taskLayout === "frequency" && (<>
             <div style={{ display: "flex", background: "#ECEAE3", borderBottom: "2px solid " + fm.dot }}>
               {frequencies.map(f => { const meta = freqMeta[f], active = activeFreq === f; return (
@@ -571,7 +601,6 @@ export default function CleaningSchedule() {
               </div>
             </div>
           </>)}
-
           {taskLayout === "room" && (
             <div style={{ borderBottom: "1px solid #DDD8CE" }}>
               {levels.map(lv => (
@@ -604,9 +633,9 @@ export default function CleaningSchedule() {
                 <div style={{ padding: "6px 12px 2px" }}>
                   {lv.rooms.map(room => {
                     const mergedTasks = getMergedTasks(room.id, activeFreq), tasks = mergedTasks.map(t => t.text);
-                    const colKey = room.id + "-" + activeFreq, isOpen = !collapsed[colKey];
+                    const colKey = room.id+"-"+activeFreq, isOpen = !collapsed[colKey];
                     const doneCount = tasks.filter((_, i) => completions[room.id+"-"+activeFreq+"-"+i]).length;
-                    const roomPct = tasks.length ? Math.round(doneCount / tasks.length * 100) : 0;
+                    const roomPct = tasks.length ? Math.round(doneCount/tasks.length*100) : 0;
                     const allDone = tasks.length > 0 && doneCount === tasks.length;
                     return (
                       <div key={room.id} style={{ marginBottom: 7, borderRadius: 10, overflow: "hidden", border: "1px solid " + (tasks.length > 0 ? fm.border : "#E4E0D8"), opacity: tasks.length === 0 ? 0.5 : 1 }}>
@@ -616,11 +645,11 @@ export default function CleaningSchedule() {
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                               <span style={{ fontSize: 13, fontWeight: "bold", color: tasks.length === 0 ? "#CCC" : "#1A1A1A" }}>{room.name}</span>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                                {tasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fm.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount + "/" + tasks.length}</span>}
+                                {tasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fm.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount+"/"+tasks.length}</span>}
                                 {tasks.length > 0 && <span style={{ fontSize: 11, color: "#CCC", display: "inline-block", transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}>v</span>}
                               </div>
                             </div>
-                            {tasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct + "%", background: fm.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
+                            {tasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct+"%", background: fm.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
                             {tasks.length === 0 && <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>No {activeFreq.toLowerCase()} tasks</span>}
                           </div>
                         </div>
@@ -630,12 +659,12 @@ export default function CleaningSchedule() {
                               const key = room.id+"-"+activeFreq+"-"+i, completion = completions[key], done = !!completion;
                               const member = done ? FAMILY.find(f => f.id === completion.by) : null;
                               return (
-                                <div key={key} onClick={() => toggleTask(key, activeFreq)} style={{ padding: "10px 14px", borderBottom: i < tasks.length-1 ? "1px solid " + fm.border : "none", cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
+                                <div key={key} onClick={() => toggleTask(key, activeFreq)} style={{ padding: "10px 14px", borderBottom: i < tasks.length-1 ? "1px solid "+fm.border : "none", cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
                                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                                    <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid " + (done ? completion.color : "#CCC"), background: done ? completion.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                    <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid "+(done?completion.color:"#CCC"), background: done?completion.color:"transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                       {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                                     </div>
-                                    <span style={{ flex: 1, fontSize: 13, color: done ? "#AAA" : fm.text, textDecoration: done ? "line-through" : "none" }}>{task}</span>
+                                    <span style={{ flex: 1, fontSize: 13, color: done?"#AAA":fm.text, textDecoration: done?"line-through":"none" }}>{task}</span>
                                     {done && member && (
                                       <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                                         <Avatar member={member} size={24} fontSize={11} />
@@ -666,36 +695,36 @@ export default function CleaningSchedule() {
               const mergedTasks = getMergedTasks(activeRoom.id, freq), tasks = mergedTasks.map(t => t.text);
               const fmr = freqMeta[freq], colKey = "room-"+activeRoom.id+"-"+freq, isOpen = !collapsed[colKey];
               const doneCount = tasks.filter((_, i) => completions[activeRoom.id+"-"+freq+"-"+i]).length;
-              const roomPct = tasks.length ? Math.round(doneCount / tasks.length * 100) : 0;
+              const roomPct = tasks.length ? Math.round(doneCount/tasks.length*100) : 0;
               const allDone = tasks.length > 0 && doneCount === tasks.length;
               return (
-                <div key={freq} style={{ marginBottom: 10, borderRadius: 10, overflow: "hidden", border: "1px solid " + (tasks.length > 0 ? fmr.border : "#E4E0D8"), opacity: tasks.length === 0 ? 0.4 : 1 }}>
+                <div key={freq} style={{ marginBottom: 10, borderRadius: 10, overflow: "hidden", border: "1px solid "+(tasks.length > 0 ? fmr.border : "#E4E0D8"), opacity: tasks.length === 0 ? 0.4 : 1 }}>
                   <div onClick={() => tasks.length > 0 && toggleRoom(colKey)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: allDone ? fmr.bg : "#fff", cursor: tasks.length > 0 ? "pointer" : "default" }}>
                     <div style={{ width: 10, height: 10, borderRadius: "50%", background: fmr.dot, flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                         <span style={{ fontSize: 11, fontWeight: "bold", color: tasks.length === 0 ? "#CCC" : fmr.text, textTransform: "uppercase" }}>{freq}</span>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          {tasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fmr.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount + "/" + tasks.length}</span>}
+                          {tasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fmr.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount+"/"+tasks.length}</span>}
                           {tasks.length > 0 && <span style={{ fontSize: 11, color: "#CCC", display: "inline-block", transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}>v</span>}
                         </div>
                       </div>
-                      {tasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct + "%", background: fmr.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
+                      {tasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct+"%", background: fmr.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
                       {tasks.length === 0 && <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>No {freq.toLowerCase()} tasks</span>}
                     </div>
                   </div>
                   {tasks.length > 0 && isOpen && (
-                    <div style={{ borderTop: "1px solid " + fmr.border, background: fmr.lightBg }}>
+                    <div style={{ borderTop: "1px solid "+fmr.border, background: fmr.lightBg }}>
                       {tasks.map((task, i) => {
                         const key = activeRoom.id+"-"+freq+"-"+i, completion = completions[key], done = !!completion;
                         const member = done ? FAMILY.find(f => f.id === completion.by) : null;
                         return (
-                          <div key={key} onClick={() => toggleTask(key, freq)} style={{ padding: "10px 14px", borderBottom: i < tasks.length-1 ? "1px solid " + fmr.border : "none", cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
+                          <div key={key} onClick={() => toggleTask(key, freq)} style={{ padding: "10px 14px", borderBottom: i < tasks.length-1 ? "1px solid "+fmr.border : "none", cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                              <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid " + (done ? completion.color : "#CCC"), background: done ? completion.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid "+(done?completion.color:"#CCC"), background: done?completion.color:"transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                 {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                               </div>
-                              <span style={{ flex: 1, fontSize: 13, color: done ? "#AAA" : fmr.text, textDecoration: done ? "line-through" : "none" }}>{task}</span>
+                              <span style={{ flex: 1, fontSize: 13, color: done?"#AAA":fmr.text, textDecoration: done?"line-through":"none" }}>{task}</span>
                               {done && member && (
                                 <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                                   <Avatar member={member} size={24} fontSize={11} />
@@ -722,14 +751,14 @@ export default function CleaningSchedule() {
         <div style={{ paddingBottom: 60 }}>
           <div style={{ display: "flex", background: "#ECEAE3", borderBottom: "1px solid #DDD8CE" }}>
             {levels.map(lv => (
-              <button key={lv.id} onClick={() => { setEditLevel(lv); setEditRoom(lv.rooms[0]); setShowAddTask(false); setEditingTask(null); }} style={{ flex: 1, background: editLevel.id === lv.id ? lv.color + "18" : "none", border: "none", padding: "12px 4px 10px", cursor: "pointer", fontFamily: "inherit", fontSize: 10, fontWeight: editLevel.id === lv.id ? "bold" : "normal", color: editLevel.id === lv.id ? lv.color : "#999", borderBottom: editLevel.id === lv.id ? "3px solid " + lv.color : "3px solid transparent", textTransform: "uppercase" }}>
+              <button key={lv.id} onClick={() => { setEditLevel(lv); setEditRoom(lv.rooms[0]); setShowAddTask(false); setEditingTask(null); }} style={{ flex: 1, background: editLevel.id === lv.id ? lv.color+"18" : "none", border: "none", padding: "12px 4px 10px", cursor: "pointer", fontFamily: "inherit", fontSize: 10, fontWeight: editLevel.id === lv.id ? "bold" : "normal", color: editLevel.id === lv.id ? lv.color : "#999", borderBottom: editLevel.id === lv.id ? "3px solid "+lv.color : "3px solid transparent", textTransform: "uppercase" }}>
                 <div style={{ fontSize: 16, marginBottom: 3 }}>{lv.icon}</div>{lv.label}
               </button>
             ))}
           </div>
           <div style={{ padding: "10px 12px 0", display: "flex", gap: 6, overflowX: "auto" }}>
             {editLevel.rooms.map(room => (
-              <button key={room.id} onClick={() => { setEditRoom(room); setShowAddTask(false); setEditingTask(null); }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 16, border: "1px solid " + (editRoom.id === room.id ? editLevel.color : "#DDD8CE"), background: editRoom.id === room.id ? editLevel.color : "#fff", color: editRoom.id === room.id ? "#fff" : "#555", cursor: "pointer", fontFamily: "inherit", fontSize: 11, whiteSpace: "nowrap", flexShrink: 0 }}>
+              <button key={room.id} onClick={() => { setEditRoom(room); setShowAddTask(false); setEditingTask(null); }} style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 16, border: "1px solid "+(editRoom.id === room.id ? editLevel.color : "#DDD8CE"), background: editRoom.id === room.id ? editLevel.color : "#fff", color: editRoom.id === room.id ? "#fff" : "#555", cursor: "pointer", fontFamily: "inherit", fontSize: 11, whiteSpace: "nowrap", flexShrink: 0 }}>
                 <RoomIcon icon={room.icon} size={13} /><span>{room.name}</span>
               </button>
             ))}
@@ -745,20 +774,16 @@ export default function CleaningSchedule() {
                       <span style={{ fontSize: 11, fontWeight: "bold", color: fmr.text, textTransform: "uppercase" }}>{freq}</span>
                       <span style={{ fontSize: 10, color: "#BBB" }}>({tasks.length})</span>
                     </div>
-                    <button onClick={() => { setShowAddTask(true); setNewTaskFreq(freq); setNewTaskText(""); setNewTaskAssignees([]); setEditingTask(null); }} style={{ fontSize: 11, color: fmr.text, background: fmr.bg, border: "1px solid " + fmr.border, borderRadius: 10, padding: "3px 10px", cursor: "pointer", fontFamily: "inherit" }}>+ Add</button>
+                    <button onClick={() => { setShowAddTask(true); setNewTaskFreq(freq); setNewTaskText(""); setNewTaskAssignees([]); setEditingTask(null); }} style={{ fontSize: 11, color: fmr.text, background: fmr.bg, border: "1px solid "+fmr.border, borderRadius: 10, padding: "3px 10px", cursor: "pointer", fontFamily: "inherit" }}>+ Add</button>
                   </div>
                   {showAddTask && newTaskFreq === freq && editingTask === null && (
-                    <div style={{ marginBottom: 8, padding: "10px 12px", background: fmr.bg, border: "1px solid " + fmr.border, borderRadius: 10 }}>
-                      <input autoFocus value={newTaskText} onChange={e => setNewTaskText(e.target.value)} placeholder="Task description" style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid " + fmr.border, borderRadius: 6, fontFamily: "inherit", marginBottom: 8, boxSizing: "border-box" }} />
+                    <div style={{ marginBottom: 8, padding: "10px 12px", background: fmr.bg, border: "1px solid "+fmr.border, borderRadius: 10 }}>
+                      <input autoFocus value={newTaskText} onChange={e => setNewTaskText(e.target.value)} placeholder="Task description" style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid "+fmr.border, borderRadius: 6, fontFamily: "inherit", marginBottom: 8, boxSizing: "border-box" }} />
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
-                        {FAMILY.map(m => (
-                          <button key={m.id} onClick={() => setNewTaskAssignees(prev => prev.includes(m.id) ? prev.filter(x => x !== m.id) : [...prev, m.id])} style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 12, border: "1px solid " + (newTaskAssignees.includes(m.id) ? m.color : "#DDD"), background: newTaskAssignees.includes(m.id) ? m.color + "22" : "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>
-                            <Avatar member={m} size={16} fontSize={8} /><span style={{ color: newTaskAssignees.includes(m.id) ? m.color : "#777" }}>{m.name}</span>
-                          </button>
-                        ))}
+                        {FAMILY.map(m => (<button key={m.id} onClick={() => setNewTaskAssignees(prev => prev.includes(m.id) ? prev.filter(x => x !== m.id) : [...prev, m.id])} style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 12, border: "1px solid "+(newTaskAssignees.includes(m.id)?m.color:"#DDD"), background: newTaskAssignees.includes(m.id)?m.color+"22":"#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}><Avatar member={m} size={16} fontSize={8} /><span style={{ color: newTaskAssignees.includes(m.id)?m.color:"#777" }}>{m.name}</span></button>))}
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => { if (!newTaskText.trim()) return; setCustomTasks(prev => { const snap = ensureSnapshot(editRoom.id, freq, prev); return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: [...snap[editRoom.id][freq], { text: newTaskText.trim(), assignees: newTaskAssignees }] } }; }); setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ flex: 1, padding: "7px", background: fmr.dot, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>Save</button>
+                        <button onClick={() => { if (!newTaskText.trim()) return; const updated = (prev => { const snap = ensureSnapshot(editRoom.id, freq, prev); return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: [...snap[editRoom.id][freq], { text: newTaskText.trim(), assignees: newTaskAssignees }] } }; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ flex: 1, padding: "7px", background: fmr.dot, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>Save</button>
                         <button onClick={() => { setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ padding: "7px 14px", background: "#fff", border: "1px solid #DDD", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, color: "#888" }}>Cancel</button>
                       </div>
                     </div>
@@ -767,17 +792,13 @@ export default function CleaningSchedule() {
                   {tasks.map((task, i) => (
                     <div key={i} style={{ marginBottom: 5 }}>
                       {editingTask?.roomId === editRoom.id && editingTask?.freq === freq && editingTask?.index === i ? (
-                        <div style={{ padding: "10px 12px", background: fmr.bg, border: "1px solid " + fmr.border, borderRadius: 10 }}>
-                          <input autoFocus value={newTaskText} onChange={e => setNewTaskText(e.target.value)} style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid " + fmr.border, borderRadius: 6, fontFamily: "inherit", marginBottom: 8, boxSizing: "border-box" }} />
+                        <div style={{ padding: "10px 12px", background: fmr.bg, border: "1px solid "+fmr.border, borderRadius: 10 }}>
+                          <input autoFocus value={newTaskText} onChange={e => setNewTaskText(e.target.value)} style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid "+fmr.border, borderRadius: 6, fontFamily: "inherit", marginBottom: 8, boxSizing: "border-box" }} />
                           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
-                            {FAMILY.map(m => (
-                              <button key={m.id} onClick={() => setNewTaskAssignees(prev => prev.includes(m.id) ? prev.filter(x => x !== m.id) : [...prev, m.id])} style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 12, border: "1px solid " + (newTaskAssignees.includes(m.id) ? m.color : "#DDD"), background: newTaskAssignees.includes(m.id) ? m.color + "22" : "#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}>
-                                <Avatar member={m} size={16} fontSize={8} /><span style={{ color: newTaskAssignees.includes(m.id) ? m.color : "#777" }}>{m.name}</span>
-                              </button>
-                            ))}
+                            {FAMILY.map(m => (<button key={m.id} onClick={() => setNewTaskAssignees(prev => prev.includes(m.id) ? prev.filter(x => x !== m.id) : [...prev, m.id])} style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 12, border: "1px solid "+(newTaskAssignees.includes(m.id)?m.color:"#DDD"), background: newTaskAssignees.includes(m.id)?m.color+"22":"#fff", cursor: "pointer", fontFamily: "inherit", fontSize: 11 }}><Avatar member={m} size={16} fontSize={8} /><span style={{ color: newTaskAssignees.includes(m.id)?m.color:"#777" }}>{m.name}</span></button>))}
                           </div>
                           <div style={{ display: "flex", gap: 6 }}>
-                            <button onClick={() => { if (!newTaskText.trim()) return; setCustomTasks(prev => { const snap = ensureSnapshot(editRoom.id, freq, prev); const updated = [...snap[editRoom.id][freq]]; updated[i] = { text: newTaskText.trim(), assignees: newTaskAssignees }; return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: updated } }; }); setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ flex: 1, padding: "7px", background: fmr.dot, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>Save</button>
+                            <button onClick={() => { if (!newTaskText.trim()) return; const updated = (prev => { const snap = ensureSnapshot(editRoom.id, freq, prev); const arr = [...snap[editRoom.id][freq]]; arr[i] = { text: newTaskText.trim(), assignees: newTaskAssignees }; return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: arr } }; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ flex: 1, padding: "7px", background: fmr.dot, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>Save</button>
                             <button onClick={() => { setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ padding: "7px 14px", background: "#fff", border: "1px solid #DDD", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, color: "#888" }}>Cancel</button>
                           </div>
                         </div>
@@ -788,7 +809,7 @@ export default function CleaningSchedule() {
                             {task.assignees?.length > 0 && <div style={{ display: "flex", gap: 3, marginTop: 4 }}>{task.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={16} fontSize={8} /> : null; })}</div>}
                           </div>
                           <button onClick={() => { setEditingTask({ roomId: editRoom.id, freq, index: i }); setNewTaskText(task.text); setNewTaskAssignees(task.assignees || []); setShowAddTask(false); }} style={{ fontSize: 11, color: "#AAA", background: "none", border: "none", cursor: "pointer", padding: "4px 6px" }}>Edit</button>
-                          <button onClick={() => { setCustomTasks(prev => { const snap = ensureSnapshot(editRoom.id, freq, prev); return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: snap[editRoom.id][freq].filter((_, idx) => idx !== i) } }; }); }} style={{ fontSize: 11, color: "#D47F6B", background: "none", border: "none", cursor: "pointer", padding: "4px 6px" }}>Delete</button>
+                          <button onClick={() => { const updated = (prev => { const snap = ensureSnapshot(editRoom.id, freq, prev); return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: snap[editRoom.id][freq].filter((_,idx) => idx !== i) } }; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }} style={{ fontSize: 11, color: "#D47F6B", background: "none", border: "none", cursor: "pointer", padding: "4px 6px" }}>Delete</button>
                         </div>
                       )}
                     </div>
