@@ -238,10 +238,8 @@ function toDateStr(ts) {
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
 
-// Get date 30 days ago as YYYY-MM-DD
 function daysAgo(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
+  const d = new Date(); d.setDate(d.getDate() - n);
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
 
@@ -249,6 +247,16 @@ function today() {
   const d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
+
+const selectStyle = {
+  fontSize: 13, padding: "8px 10px", border: "1px solid #DDD8CE", borderRadius: 8,
+  fontFamily: "Georgia, serif", background: "#fff", color: "#1A1A1A",
+  width: "100%", boxSizing: "border-box", appearance: "none",
+  backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E\")",
+  backgroundRepeat: "no-repeat", backgroundPosition: "right 10px center", paddingRight: 30,
+};
+
+const labelStyle = { fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 4px", display: "block" };
 
 export default function CleaningSchedule() {
   const [activeFreq, setActiveFreq] = useState("Daily");
@@ -268,19 +276,20 @@ export default function CleaningSchedule() {
   const [newTaskAssignees, setNewTaskAssignees] = useState([]);
   const [showAddTask, setShowAddTask] = useState(false);
 
-  // History / reporting state
-  const [allArchiveData, setAllArchiveData] = useState({}); // periodKey -> completions object
-  const [archiveIndex, setArchiveIndex] = useState([]);
+  // Archive data
+  const [allArchiveData, setAllArchiveData] = useState({});
   const [archiveLoading, setArchiveLoading] = useState(false);
 
   // Report filters
-  const [reportDateFrom, setReportDateFrom] = useState(daysAgo(30));
+  const [reportType, setReportType] = useState("daily"); // daily | monthly | quarterly | annual | custom
+  const [reportDateFrom, setReportDateFrom] = useState(daysAgo(7));
   const [reportDateTo, setReportDateTo] = useState(today());
-  const [reportMembers, setReportMembers] = useState([]); // empty = all
-  const [reportRooms, setReportRooms] = useState([]);     // empty = all
-  const [reportFreqs, setReportFreqs] = useState([]);     // empty = all
-  const [reportGroupBy, setReportGroupBy] = useState("date"); // date | person | room
-  const [showFilters, setShowFilters] = useState(true);
+  const [filterFloor, setFilterFloor] = useState("all");
+  const [filterRoom, setFilterRoom] = useState("all");
+  const [filterFreq, setFilterFreq] = useState("all");
+  const [filterCompleted, setFilterCompleted] = useState("all");
+  const [filterAssigned, setFilterAssigned] = useState("all");
+  const [reportResults, setReportResults] = useState(null);
 
   const writingRef = useRef(false);
   const fm = freqMeta[activeFreq];
@@ -310,27 +319,20 @@ export default function CleaningSchedule() {
     return live;
   }, [archivePeriod]);
 
-  // Real-time listener for completions
   useEffect(() => {
     let initialized = false;
     const unsub = dbListen("completions", async (result) => {
       if (writingRef.current) return;
       if (result?.value) {
         const raw = JSON.parse(result.value);
-        if (!initialized) {
-          initialized = true;
-          const pruned = await pruneAndArchive(raw);
-          setCompletions(pruned);
-        } else {
-          setCompletions(raw);
-        }
+        if (!initialized) { initialized = true; const pruned = await pruneAndArchive(raw); setCompletions(pruned); }
+        else setCompletions(raw);
       } else { initialized = true; }
       setLoading(false);
     });
     return () => unsub();
   }, [pruneAndArchive]);
 
-  // Real-time listener for customTasks
   useEffect(() => {
     const unsub = dbListen("customTasks", (result) => {
       if (writingRef.current) return;
@@ -351,15 +353,15 @@ export default function CleaningSchedule() {
     setTimeout(() => { writingRef.current = false; }, 500);
   }, []);
 
-  // Load all archive data when switching to history
+  // Load archive when going to history tab
   useEffect(() => {
     if (view !== "history") return;
     async function loadAll() {
       setArchiveLoading(true);
+      setReportResults(null);
       try {
         const idxResult = await dbGet("archive-index");
         const index = idxResult?.value ? JSON.parse(idxResult.value) : [];
-        setArchiveIndex(index);
         const dataMap = {};
         await Promise.all(index.map(async (pk) => {
           const r = await dbGet("archive-" + storageKey(pk));
@@ -371,6 +373,11 @@ export default function CleaningSchedule() {
     }
     loadAll();
   }, [view]);
+
+  // Derive available rooms based on floor filter
+  const availableRooms = filterFloor === "all"
+    ? allRooms
+    : (levels.find(l => l.id === filterFloor)?.rooms || []);
 
   function getTaskList(roomId, freq) {
     if (customTasks[roomId]?.[freq] !== undefined) return customTasks[roomId][freq];
@@ -399,34 +406,79 @@ export default function CleaningSchedule() {
 
   const toggleRoom = (key) => setCollapsed(p => ({ ...p, [key]: !p[key] }));
 
-  // ── Build all report items from archive + current completions ─────────────
-  const buildReportItems = useCallback(() => {
+  // Determine date range based on report type
+  function getDateRange() {
+    const now = new Date();
+    if (reportType === "daily") return { from: today(), to: today() };
+    if (reportType === "monthly") {
+      const y = now.getFullYear(), m = now.getMonth();
+      const from = y + "-" + String(m+1).padStart(2,"0") + "-01";
+      const lastDay = new Date(y, m+1, 0).getDate();
+      const to = y + "-" + String(m+1).padStart(2,"0") + "-" + String(lastDay).padStart(2,"0");
+      return { from, to };
+    }
+    if (reportType === "quarterly") {
+      const q = Math.floor(now.getMonth() / 3);
+      const startMonth = q * 3;
+      const endMonth = startMonth + 2;
+      const y = now.getFullYear();
+      const from = y + "-" + String(startMonth+1).padStart(2,"0") + "-01";
+      const lastDay = new Date(y, endMonth+1, 0).getDate();
+      const to = y + "-" + String(endMonth+1).padStart(2,"0") + "-" + String(lastDay).padStart(2,"0");
+      return { from, to };
+    }
+    if (reportType === "annual") {
+      return { from: now.getFullYear() + "-01-01", to: now.getFullYear() + "-12-31" };
+    }
+    return { from: reportDateFrom, to: reportDateTo };
+  }
+
+  function runReport() {
+    const { from, to } = getDateRange();
     const items = [];
 
-    // Helper to add items from a completions object
     function addFromCompletions(completionsObj) {
       Object.entries(completionsObj).forEach(([key, c]) => {
         if (!c || !c.at) return;
         const dateStr = toDateStr(c.at);
-        if (dateStr < reportDateFrom || dateStr > reportDateTo) return;
-        if (reportMembers.length > 0 && !reportMembers.includes(c.by)) return;
-        if (reportFreqs.length > 0 && !reportFreqs.includes(c.freq)) return;
+        if (dateStr < from || dateStr > to) return;
 
-        // Parse room from key: roomId-freq-index
-        const parts = key.split("-");
-        // freq is the second-to-last group before index — find room by matching known room ids
+        // Filter by who completed
+        if (filterCompleted !== "all" && c.by !== filterCompleted) return;
+
+        // Filter by frequency
+        if (filterFreq !== "all" && c.freq !== filterFreq) return;
+
+        // Find room
         const room = allRooms.find(r => key.startsWith(r.id + "-"));
         if (!room) return;
-        if (reportRooms.length > 0 && !reportRooms.includes(room.id)) return;
 
+        // Filter by floor
+        if (filterFloor !== "all") {
+          const level = levels.find(l => l.id === filterFloor);
+          if (!level || !level.rooms.some(r => r.id === room.id)) return;
+        }
+
+        // Filter by room
+        if (filterRoom !== "all" && room.id !== filterRoom) return;
+
+        // Get task text and assignees
         const freq = c.freq;
         const taskIndex = parseInt(key.split("-").pop());
         const taskList = getTaskList(room.id, freq);
-        const taskText = taskList[taskIndex]?.text || key;
+        const taskObj = taskList[taskIndex];
+        if (!taskObj) return;
+
+        // Filter by assigned person
+        if (filterAssigned !== "all") {
+          const assignees = taskObj.assignees || [];
+          if (!assignees.includes(filterAssigned)) return;
+        }
 
         items.push({
           key,
-          task: taskText,
+          task: taskObj.text,
+          assignees: taskObj.assignees || [],
           roomId: room.id,
           roomName: room.name,
           roomIcon: room.icon,
@@ -440,72 +492,21 @@ export default function CleaningSchedule() {
       });
     }
 
-    // Current period completions
+    // Include current completions
     addFromCompletions(completions);
+    // Include archived completions
+    Object.values(allArchiveData).forEach(d => addFromCompletions(d));
 
-    // Archived completions
-    Object.values(allArchiveData).forEach(periodCompletions => {
-      addFromCompletions(periodCompletions);
-    });
-
-    // Sort by date descending
     items.sort((a, b) => b.at - a.at);
-    return items;
-  }, [completions, allArchiveData, reportDateFrom, reportDateTo, reportMembers, reportRooms, reportFreqs, customTasks]);
-
-  const reportItems = buildReportItems();
-
-  // Group items
-  function groupItems(items) {
-    const groups = {};
-    items.forEach(item => {
-      let key;
-      if (reportGroupBy === "date") {
-        key = item.dateStr;
-      } else if (reportGroupBy === "person") {
-        key = item.by;
-      } else if (reportGroupBy === "room") {
-        key = item.roomId;
-      }
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(item);
-    });
-    return groups;
+    setReportResults({ items, from, to });
   }
 
-  function groupLabel(key) {
-    if (reportGroupBy === "date") {
-      return new Date(key + "T12:00:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-    }
-    if (reportGroupBy === "person") {
-      return FAMILY.find(f => f.id === key)?.name || key;
-    }
-    if (reportGroupBy === "room") {
-      return allRooms.find(r => r.id === key)?.name || key;
-    }
-    return key;
-  }
+  // Summary stats for results
+  const totalCompleted = reportResults?.items?.length || 0;
+  const byPerson = {};
+  reportResults?.items?.forEach(i => { byPerson[i.by] = (byPerson[i.by] || 0) + 1; });
 
-  function groupColor(key) {
-    if (reportGroupBy === "person") return FAMILY.find(f => f.id === key)?.color || "#888";
-    if (reportGroupBy === "room") {
-      const level = levels.find(l => l.rooms.some(r => r.id === key));
-      return level?.color || "#888";
-    }
-    return "#5B9BD5";
-  }
-
-  const grouped = groupItems(reportItems);
-  const groupKeys = Object.keys(grouped).sort((a, b) => {
-    if (reportGroupBy === "date") return b.localeCompare(a);
-    return grouped[b].length - grouped[a].length;
-  });
-
-  // Summary stats
-  const totalCompleted = reportItems.length;
-  const uniquePeople = [...new Set(reportItems.map(i => i.by))];
-  const uniqueRoomsInReport = [...new Set(reportItems.map(i => i.roomId))];
-
+  // Tasks view progress
   let totalTasks = 0, doneTasks = 0;
   levels.forEach(lv => lv.rooms.forEach(room => {
     const tasks = getMergedTasks(room.id, activeFreq);
@@ -519,9 +520,6 @@ export default function CleaningSchedule() {
       <p style={{ color: "#AAA" }}>Loading...</p>
     </div>
   );
-
-  const inputStyle = { fontSize: 12, padding: "6px 8px", border: "1px solid #DDD8CE", borderRadius: 8, fontFamily: "Georgia, serif", background: "#fff", color: "#1A1A1A", width: "100%", boxSizing: "border-box" };
-  const chipStyle = (active, color) => ({ padding: "4px 10px", borderRadius: 12, border: "1px solid " + (active ? color : "#DDD8CE"), background: active ? color + "22" : "#fff", color: active ? color : "#777", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: active ? "bold" : "normal", whiteSpace: "nowrap" });
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }}>
@@ -542,165 +540,141 @@ export default function CleaningSchedule() {
 
       {/* VIEW TOGGLE */}
       <div style={{ display: "flex", background: "#111", borderTop: "1px solid #2A2A2A" }}>
-        {[["tasks","Tasks"],["history","Reports"],["edit","Edit"]].map(([v,label]) => (
+        {[["tasks","Tasks"],["history","History"],["edit","Edit"]].map(([v,label]) => (
           <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "10px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: view === v ? "#F5F2EC" : "#555", borderBottom: view === v ? "2px solid #F5F2EC" : "2px solid transparent", textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</button>
         ))}
       </div>
 
-      {/* ═══════════════════ HISTORY / REPORTS VIEW ═══════════════════ */}
+      {/* ═══════════════════ HISTORY VIEW ═══════════════════ */}
       {view === "history" && (
         <div style={{ paddingBottom: 60 }}>
+          <div style={{ background: "#fff", borderBottom: "1px solid #E4E0D8", padding: "16px" }}>
 
-          {/* Filter panel toggle */}
-          <div style={{ padding: "10px 16px", background: "#F5F2EC", borderBottom: "1px solid #E4E0D8", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>Report Builder</span>
-            <button onClick={() => setShowFilters(f => !f)} style={{ fontSize: 11, color: "#5B9BD5", background: "none", border: "1px solid #8BBDE8", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-              {showFilters ? "Hide Filters" : "Show Filters"}
+            {/* Report type */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Report Period</label>
+              <select value={reportType} onChange={e => { setReportType(e.target.value); setReportResults(null); }} style={selectStyle}>
+                <option value="daily">Today (Daily)</option>
+                <option value="monthly">This Month</option>
+                <option value="quarterly">This Quarter</option>
+                <option value="annual">This Year (Annual)</option>
+                <option value="custom">Custom Date Range</option>
+              </select>
+            </div>
+
+            {/* Custom date range */}
+            {reportType === "custom" && (
+              <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>From</label>
+                  <input type="date" value={reportDateFrom} onChange={e => { setReportDateFrom(e.target.value); setReportResults(null); }} style={selectStyle} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>To</label>
+                  <input type="date" value={reportDateTo} onChange={e => { setReportDateTo(e.target.value); setReportResults(null); }} style={selectStyle} />
+                </div>
+              </div>
+            )}
+
+            {/* Floor */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Floor</label>
+              <select value={filterFloor} onChange={e => { setFilterFloor(e.target.value); setFilterRoom("all"); setReportResults(null); }} style={selectStyle}>
+                <option value="all">All Floors</option>
+                {levels.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+            </div>
+
+            {/* Room */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Room</label>
+              <select value={filterRoom} onChange={e => { setFilterRoom(e.target.value); setReportResults(null); }} style={selectStyle}>
+                <option value="all">All Rooms</option>
+                {availableRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            </div>
+
+            {/* Frequency */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Frequency</label>
+              <select value={filterFreq} onChange={e => { setFilterFreq(e.target.value); setReportResults(null); }} style={selectStyle}>
+                <option value="all">All Frequencies</option>
+                {frequencies.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+
+            {/* Who completed */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>Completed By</label>
+              <select value={filterCompleted} onChange={e => { setFilterCompleted(e.target.value); setReportResults(null); }} style={selectStyle}>
+                <option value="all">Anyone</option>
+                {FAMILY.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+
+            {/* Who is assigned */}
+            <div style={{ marginBottom: 18 }}>
+              <label style={labelStyle}>Assigned To</label>
+              <select value={filterAssigned} onChange={e => { setFilterAssigned(e.target.value); setReportResults(null); }} style={selectStyle}>
+                <option value="all">Anyone</option>
+                {FAMILY.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+
+            {/* Run button */}
+            <button
+              onClick={runReport}
+              disabled={archiveLoading}
+              style={{ width: "100%", padding: "12px", background: archiveLoading ? "#CCC" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 10, cursor: archiveLoading ? "not-allowed" : "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: "bold", letterSpacing: "0.04em" }}
+            >
+              {archiveLoading ? "Loading data..." : "Run Report"}
             </button>
           </div>
 
-          {showFilters && (
-            <div style={{ background: "#fff", borderBottom: "1px solid #E4E0D8", padding: "14px 16px" }}>
+          {/* Results */}
+          {reportResults && (
+            <div style={{ padding: "14px 14px 0" }}>
 
-              {/* Date range */}
-              <p style={{ margin: "0 0 6px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.1em" }}>Date Range</p>
+              {/* Date range label */}
+              <p style={{ fontSize: 11, color: "#AAA", margin: "0 0 10px", fontStyle: "italic" }}>
+                {new Date(reportResults.from + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                {reportResults.from !== reportResults.to && " — " + new Date(reportResults.to + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+              </p>
+
+              {/* Summary cards */}
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                <div style={{ flex: 1 }}>
-                  <p style={{ margin: "0 0 3px", fontSize: 10, color: "#888" }}>From</p>
-                  <input type="date" value={reportDateFrom} onChange={e => setReportDateFrom(e.target.value)} style={inputStyle} />
+                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #E8F5EE", textAlign: "center" }}>
+                  <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#6DB894" }}>{totalCompleted}</p>
+                  <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>tasks completed</p>
                 </div>
-                <div style={{ flex: 1 }}>
-                  <p style={{ margin: "0 0 3px", fontSize: 10, color: "#888" }}>To</p>
-                  <input type="date" value={reportDateTo} onChange={e => setReportDateTo(e.target.value)} style={inputStyle} />
+                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #EBF4FC", textAlign: "center" }}>
+                  <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#5B9BD5" }}>{Object.keys(byPerson).length}</p>
+                  <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>contributors</p>
+                </div>
+                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #F2EBF9", textAlign: "center" }}>
+                  <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#A67DC4" }}>{new Set(reportResults.items.map(i => i.roomId)).size}</p>
+                  <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>rooms</p>
                 </div>
               </div>
 
-              {/* Quick date presets */}
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-                {[["Today", 0],["7 days", 7],["30 days", 30],["90 days", 90],["This year", 365]].map(([label, days]) => (
-                  <button key={label} onClick={() => { setReportDateFrom(daysAgo(days)); setReportDateTo(today()); }} style={{ ...chipStyle(reportDateFrom === daysAgo(days) && reportDateTo === today(), "#5B9BD5") }}>{label}</button>
-                ))}
-              </div>
-
-              {/* People filter */}
-              <p style={{ margin: "0 0 6px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.1em" }}>People <span style={{ color: "#CCC", fontStyle: "italic", textTransform: "none" }}>(all if none selected)</span></p>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-                {FAMILY.map(m => {
-                  const active = reportMembers.includes(m.id);
-                  return (
-                    <button key={m.id} onClick={() => setReportMembers(prev => active ? prev.filter(x => x !== m.id) : [...prev, m.id])} style={{ display: "flex", alignItems: "center", gap: 5, ...chipStyle(active, m.color) }}>
-                      <Avatar member={m} size={16} fontSize={8} />{m.name}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Frequency filter */}
-              <p style={{ margin: "0 0 6px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.1em" }}>Frequency <span style={{ color: "#CCC", fontStyle: "italic", textTransform: "none" }}>(all if none selected)</span></p>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-                {frequencies.map(f => {
-                  const active = reportFreqs.includes(f);
-                  const meta = freqMeta[f];
-                  return (
-                    <button key={f} onClick={() => setReportFreqs(prev => active ? prev.filter(x => x !== f) : [...prev, f])} style={chipStyle(active, meta.dot)}>
-                      {f}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Room filter */}
-              <p style={{ margin: "0 0 6px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.1em" }}>Rooms <span style={{ color: "#CCC", fontStyle: "italic", textTransform: "none" }}>(all if none selected)</span></p>
-              {levels.map(lv => (
-                <div key={lv.id} style={{ marginBottom: 8 }}>
-                  <p style={{ margin: "0 0 4px", fontSize: 10, color: lv.color, fontWeight: "bold", textTransform: "uppercase" }}>{lv.label}</p>
-                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                    {lv.rooms.map(room => {
-                      const active = reportRooms.includes(room.id);
-                      return (
-                        <button key={room.id} onClick={() => setReportRooms(prev => active ? prev.filter(x => x !== room.id) : [...prev, room.id])} style={{ display: "flex", alignItems: "center", gap: 4, ...chipStyle(active, lv.color) }}>
-                          <RoomIcon icon={room.icon} size={11} />{room.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-
-              {/* Group by */}
-              <p style={{ margin: "14px 0 6px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.1em" }}>Group By</p>
-              <div style={{ display: "flex", gap: 6 }}>
-                {[["date","Date"],["person","Person"],["room","Room"]].map(([v,label]) => (
-                  <button key={v} onClick={() => setReportGroupBy(v)} style={{ ...chipStyle(reportGroupBy === v, "#1A1A1A"), background: reportGroupBy === v ? "#1A1A1A" : "#fff", color: reportGroupBy === v ? "#fff" : "#777" }}>{label}</button>
-                ))}
-              </div>
-
-              {/* Clear filters */}
-              <button onClick={() => { setReportMembers([]); setReportRooms([]); setReportFreqs([]); setReportDateFrom(daysAgo(30)); setReportDateTo(today()); }} style={{ marginTop: 14, fontSize: 11, color: "#D47F6B", background: "none", border: "1px solid #EE8898", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}>
-                Clear All Filters
-              </button>
-            </div>
-          )}
-
-          {/* Summary bar */}
-          {archiveLoading ? (
-            <div style={{ padding: "24px", textAlign: "center" }}>
-              <p style={{ color: "#AAA", fontSize: 13 }}>Loading archive data...</p>
-            </div>
-          ) : (
-            <>
-              <div style={{ padding: "12px 16px", background: "#ECEAE3", borderBottom: "1px solid #DDD8CE", display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#6DB894" }}>{totalCompleted}</p>
-                  <p style={{ margin: 0, fontSize: 10, color: "#888" }}>tasks completed</p>
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#5B9BD5" }}>{uniquePeople.length}</p>
-                  <p style={{ margin: 0, fontSize: 10, color: "#888" }}>people active</p>
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#A67DC4" }}>{uniqueRoomsInReport.length}</p>
-                  <p style={{ margin: 0, fontSize: 10, color: "#888" }}>rooms covered</p>
-                </div>
-                {totalCompleted > 0 && (
-                  <div style={{ flex: 1, minWidth: 120 }}>
-                    <p style={{ margin: "0 0 4px", fontSize: 10, color: "#888" }}>Top contributor</p>
-                    {(() => {
-                      const counts = {};
-                      reportItems.forEach(i => { counts[i.by] = (counts[i.by] || 0) + 1; });
-                      const top = Object.entries(counts).sort((a,b) => b[1]-a[1])[0];
-                      const member = FAMILY.find(f => f.id === top[0]);
-                      return member ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                          <Avatar member={member} size={20} fontSize={10} />
-                          <span style={{ fontSize: 12, color: member.color, fontWeight: "bold" }}>{member.name}</span>
-                          <span style={{ fontSize: 11, color: "#AAA" }}>{top[1]} tasks</span>
-                        </div>
-                      ) : null;
-                    })()}
-                  </div>
-                )}
-              </div>
-
-              {/* Per-person breakdown bar */}
+              {/* Per-person breakdown */}
               {totalCompleted > 0 && (
-                <div style={{ padding: "10px 16px", background: "#F5F2EC", borderBottom: "1px solid #E4E0D8" }}>
-                  <p style={{ margin: "0 0 6px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>Breakdown by person</p>
-                  <div style={{ display: "flex", height: 8, borderRadius: 6, overflow: "hidden", marginBottom: 6 }}>
+                <div style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", border: "1px solid #E4E0D8", marginBottom: 14 }}>
+                  <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>Completion by person</p>
+                  <div style={{ display: "flex", height: 8, borderRadius: 6, overflow: "hidden", marginBottom: 8 }}>
                     {FAMILY.map(m => {
-                      const count = reportItems.filter(i => i.by === m.id).length;
+                      const count = byPerson[m.id] || 0;
                       if (count === 0) return null;
-                      const pct = Math.round(count / totalCompleted * 100);
-                      return <div key={m.id} style={{ width: pct + "%", background: m.color, transition: "width 0.4s" }} title={m.name + ": " + count} />;
+                      return <div key={m.id} style={{ width: Math.round(count/totalCompleted*100)+"%", background: m.color }} title={m.name+": "+count} />;
                     })}
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     {FAMILY.map(m => {
-                      const count = reportItems.filter(i => i.by === m.id).length;
+                      const count = byPerson[m.id] || 0;
                       if (count === 0) return null;
                       return (
-                        <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: m.color }} />
+                        <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <Avatar member={m} size={18} fontSize={9} />
                           <span style={{ fontSize: 11, color: m.color, fontWeight: "bold" }}>{m.name}</span>
                           <span style={{ fontSize: 11, color: "#AAA" }}>{count}</span>
                         </div>
@@ -710,70 +684,60 @@ export default function CleaningSchedule() {
                 </div>
               )}
 
-              {/* Results */}
-              <div style={{ padding: "12px 12px 0" }}>
-                {totalCompleted === 0 ? (
-                  <div style={{ textAlign: "center", padding: "40px 20px" }}>
-                    <p style={{ fontSize: 14, color: "#CCC", margin: 0 }}>No completed tasks found</p>
-                    <p style={{ fontSize: 12, color: "#CCC", margin: "6px 0 0", fontStyle: "italic" }}>Try adjusting your date range or filters</p>
-                  </div>
-                ) : (
-                  groupKeys.map(gk => {
-                    const items = grouped[gk];
-                    const color = groupColor(gk);
-                    const label = groupLabel(gk);
-                    const memberForGroup = reportGroupBy === "person" ? FAMILY.find(f => f.id === gk) : null;
-                    const roomForGroup = reportGroupBy === "room" ? allRooms.find(r => r.id === gk) : null;
+              {/* Task list */}
+              {totalCompleted === 0 ? (
+                <div style={{ textAlign: "center", padding: "30px 0" }}>
+                  <p style={{ fontSize: 14, color: "#CCC" }}>No completed tasks match these filters.</p>
+                  <p style={{ fontSize: 12, color: "#CCC", fontStyle: "italic" }}>Try a wider date range or fewer filters.</p>
+                </div>
+              ) : (
+                <div>
+                  {reportResults.items.map((item, idx) => {
+                    const member = FAMILY.find(f => f.id === item.by);
+                    const fmr = freqMeta[item.freq] || freqMeta.Daily;
+                    const level = levels.find(l => l.rooms.some(r => r.id === item.roomId));
                     return (
-                      <div key={gk} style={{ marginBottom: 14, borderRadius: 12, overflow: "hidden", border: "1px solid " + color + "44" }}>
-                        {/* Group header */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: color + "15", borderBottom: "1px solid " + color + "33" }}>
-                          {memberForGroup && <Avatar member={memberForGroup} size={26} fontSize={12} />}
-                          {roomForGroup && <RoomIcon icon={roomForGroup.icon} size={18} />}
-                          {reportGroupBy === "date" && <span style={{ fontSize: 15 }}>📅</span>}
-                          <div style={{ flex: 1 }}>
-                            <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color }}>{label}</p>
-                            <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>{items.length} task{items.length !== 1 ? "s" : ""} completed</p>
+                      <div key={item.key + idx} style={{ marginBottom: 8, background: "#fff", borderRadius: 10, border: "1px solid #E4E0D8", overflow: "hidden" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px" }}>
+                          <div style={{ width: 18, height: 18, borderRadius: "50%", background: item.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                           </div>
-                        </div>
-                        {/* Items */}
-                        <div style={{ background: "#fff" }}>
-                          {items.map((item, idx) => {
-                            const member = FAMILY.find(f => f.id === item.by);
-                            const fmr = freqMeta[item.freq] || freqMeta.Daily;
-                            return (
-                              <div key={item.key + idx} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: idx < items.length - 1 ? "1px solid #F5F2EC" : "none" }}>
-                                <div style={{ width: 16, height: 16, borderRadius: "50%", background: item.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                                  <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5.5L7.5 1" stroke="#fff" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                                </div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <p style={{ margin: 0, fontSize: 13, color: "#1A1A1A" }}>{item.task}</p>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, flexWrap: "wrap" }}>
-                                    {reportGroupBy !== "room" && (
-                                      <span style={{ fontSize: 10, color: "#AAA" }}><RoomIcon icon={allRooms.find(r=>r.id===item.roomId)?.icon} size={10} /> {item.roomName}</span>
-                                    )}
-                                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, background: fmr.bg, color: fmr.text, fontWeight: "bold" }}>{item.freq}</span>
-                                    {reportGroupBy !== "date" && (
-                                      <span style={{ fontSize: 10, color: "#CCC" }}>{fmt(item.at)}</span>
-                                    )}
-                                  </div>
-                                </div>
-                                {reportGroupBy !== "person" && member && (
-                                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                    <Avatar member={member} size={20} fontSize={9} />
-                                    <p style={{ margin: 0, fontSize: 10, color: item.color, fontWeight: "bold" }}>{item.name}</p>
-                                  </div>
-                                )}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ margin: 0, fontSize: 13, color: "#1A1A1A" }}>{item.task}</p>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 10, color: "#888" }}>
+                                <RoomIcon icon={allRooms.find(r=>r.id===item.roomId)?.icon} size={10} /> {item.roomName}
+                              </span>
+                              {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold" }}>{level.label}</span>}
+                              <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, background: fmr.bg, color: fmr.text, fontWeight: "bold" }}>{item.freq}</span>
+                              <span style={{ fontSize: 10, color: "#CCC" }}>{fmt(item.at)}</span>
+                            </div>
+                            {item.assignees?.length > 0 && (
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
+                                <span style={{ fontSize: 9, color: "#BBB" }}>Assigned:</span>
+                                {item.assignees.map(aid => {
+                                  const m = FAMILY.find(f => f.id === aid);
+                                  return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null;
+                                })}
                               </div>
-                            );
-                          })}
+                            )}
+                          </div>
+                          {member && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                              <Avatar member={member} size={24} fontSize={11} />
+                              <div>
+                                <p style={{ margin: 0, fontSize: 10, color: item.color, fontWeight: "bold", lineHeight: 1.2 }}>{item.name}</p>
+                                <p style={{ margin: 0, fontSize: 9, color: "#CCC", lineHeight: 1.2 }}>completed</p>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
-                  })
-                )}
-              </div>
-            </>
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
