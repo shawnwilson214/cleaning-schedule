@@ -37,11 +37,11 @@ function dbListen(key, callback) {
 }
 
 const FAMILY = [
-  { id: "dad",   name: "Dad",   color: "#5B9BD5", avatar: { type: "emoji",  value: "\uD83D\uDC68" }, isKid: false },
-  { id: "mom",   name: "Mom",   color: "#D47F6B", avatar: { type: "emoji",  value: "\uD83D\uDC69" }, isKid: false },
-  { id: "zach",  name: "Zach",  color: "#6B7FD4", avatar: { type: "letter", value: "Z" }, isKid: true },
-  { id: "kyle",  name: "Kyle",  color: "#E8784A", avatar: { type: "letter", value: "K" }, isKid: true },
-  { id: "lucas", name: "Lucas", color: "#3DAA6E", avatar: { type: "letter", value: "L" }, isKid: true },
+  { id: "dad",   name: "Dad",   color: "#5B9BD5", avatar: { type: "emoji",  value: "\uD83D\uDC68" }, isKid: false, ownRoomId: null },
+  { id: "mom",   name: "Mom",   color: "#D47F6B", avatar: { type: "emoji",  value: "\uD83D\uDC69" }, isKid: false, ownRoomId: null },
+  { id: "zach",  name: "Zach",  color: "#6B7FD4", avatar: { type: "letter", value: "Z" }, isKid: true,  ownRoomId: "zach-room" },
+  { id: "kyle",  name: "Kyle",  color: "#E8784A", avatar: { type: "letter", value: "K" }, isKid: true,  ownRoomId: "kyle-room" },
+  { id: "lucas", name: "Lucas", color: "#3DAA6E", avatar: { type: "letter", value: "L" }, isKid: true,  ownRoomId: "lucas-room" },
 ];
 
 function Avatar({ member, size = 32, fontSize }) {
@@ -275,12 +275,8 @@ export default function CleaningSchedule() {
   const [newTaskFreq, setNewTaskFreq] = useState("Daily");
   const [newTaskAssignees, setNewTaskAssignees] = useState([]);
   const [showAddTask, setShowAddTask] = useState(false);
-
-  // Archive / history
   const [allArchiveData, setAllArchiveData] = useState({});
   const [archiveLoading, setArchiveLoading] = useState(false);
-
-  // Report filters
   const [reportType, setReportType] = useState("daily");
   const [reportDateFrom, setReportDateFrom] = useState(daysAgo(7));
   const [reportDateTo, setReportDateTo] = useState(today());
@@ -293,11 +289,30 @@ export default function CleaningSchedule() {
 
   const writingRef = useRef(false);
   const fm = freqMeta[activeFreq];
-
-  // Derived: is the active member a kid?
   const isKidMode = activeMember.isKid;
 
-  // When switching to kid mode, force tasks view
+  // ── Kid task visibility logic ─────────────────────────────────────────────
+  // A task is visible to a kid if:
+  //   1. The room is their own bedroom, OR
+  //   2. The task has been explicitly assigned to them via Edit
+  function isTaskVisibleToKid(task, roomId, memberId) {
+    const member = FAMILY.find(f => f.id === memberId);
+    if (!member?.isKid) return true; // adults see all
+    // Always show all tasks in their own room
+    if (roomId === member.ownRoomId) return true;
+    // Show tasks elsewhere only if explicitly assigned to them
+    return (task.assignees || []).includes(memberId);
+  }
+
+  // Returns filtered task list for a room+freq given the current user
+  function getVisibleTasks(roomId, freq, memberId) {
+    const tasks = getTaskList(roomId, freq);
+    const member = FAMILY.find(f => f.id === memberId);
+    if (!member?.isKid) return tasks;
+    return tasks.filter(t => isTaskVisibleToKid(t, roomId, memberId));
+  }
+
+  // Force back to tasks view when switching to a kid
   useEffect(() => {
     if (isKidMode && view === "edit") setView("tasks");
   }, [isKidMode, view]);
@@ -396,16 +411,6 @@ export default function CleaningSchedule() {
     return { ...prev, [roomId]: { ...(prev[roomId] || {}), [freq]: base } };
   }
 
-  // Returns tasks for a room+freq, filtered by assignee if in kid mode
-  function getMergedTasks(roomId, freq, memberId) {
-    const tasks = getTaskList(roomId, freq);
-    if (!memberId) return tasks;
-    const member = FAMILY.find(f => f.id === memberId);
-    if (!member?.isKid) return tasks;
-    // In kid mode: only show tasks assigned to this kid, or tasks with no assignees at all
-    return tasks.filter(t => !t.assignees || t.assignees.length === 0 || t.assignees.includes(memberId));
-  }
-
   const toggleTask = (key, freq) => {
     setCompletions(prev => {
       const next = { ...prev };
@@ -423,13 +428,11 @@ export default function CleaningSchedule() {
     if (reportType === "daily") return { from: today(), to: today() };
     if (reportType === "monthly") {
       const y = now.getFullYear(), m = now.getMonth();
-      const from = y + "-" + String(m+1).padStart(2,"0") + "-01";
-      const lastDay = new Date(y, m+1, 0).getDate();
-      return { from, to: y + "-" + String(m+1).padStart(2,"0") + "-" + String(lastDay).padStart(2,"0") };
+      return { from: y + "-" + String(m+1).padStart(2,"0") + "-01", to: y + "-" + String(m+1).padStart(2,"0") + "-" + String(new Date(y, m+1, 0).getDate()).padStart(2,"0") };
     }
     if (reportType === "quarterly") {
-      const q = Math.floor(now.getMonth() / 3), startMonth = q * 3, endMonth = startMonth + 2, y = now.getFullYear();
-      return { from: y + "-" + String(startMonth+1).padStart(2,"0") + "-01", to: y + "-" + String(endMonth+1).padStart(2,"0") + "-" + String(new Date(y, endMonth+1, 0).getDate()).padStart(2,"0") };
+      const q = Math.floor(now.getMonth() / 3), sm = q * 3, em = sm + 2, y = now.getFullYear();
+      return { from: y + "-" + String(sm+1).padStart(2,"0") + "-01", to: y + "-" + String(em+1).padStart(2,"0") + "-" + String(new Date(y, em+1, 0).getDate()).padStart(2,"0") };
     }
     if (reportType === "annual") return { from: now.getFullYear() + "-01-01", to: now.getFullYear() + "-12-31" };
     return { from: reportDateFrom, to: reportDateTo };
@@ -467,16 +470,15 @@ export default function CleaningSchedule() {
   const byPerson = {};
   reportResults?.items?.forEach(i => { byPerson[i.by] = (byPerson[i.by] || 0) + 1; });
 
-  // Progress bar calculations — filtered by kid if needed
+  // Progress bar — uses visible tasks for current member
   let totalTasks = 0, doneTasks = 0;
   levels.forEach(lv => lv.rooms.forEach(room => {
-    const tasks = getMergedTasks(room.id, activeFreq, isKidMode ? activeMember.id : null);
-    totalTasks += tasks.length;
-    tasks.forEach((_, i) => {
-      // Key is based on original index in full task list — need to find it
-      const fullTasks = getTaskList(room.id, activeFreq);
-      const fullIndex = fullTasks.findIndex(t => t.text === tasks[i]?.text);
-      if (fullIndex !== -1 && completions[room.id + "-" + activeFreq + "-" + fullIndex]) doneTasks++;
+    const visibleTasks = getVisibleTasks(room.id, activeFreq, activeMember.id);
+    const fullTaskList = getTaskList(room.id, activeFreq);
+    totalTasks += visibleTasks.length;
+    visibleTasks.forEach(t => {
+      const fi = fullTaskList.findIndex(ft => ft.text === t.text);
+      if (fi !== -1 && completions[room.id + "-" + activeFreq + "-" + fi]) doneTasks++;
     });
   }));
   const overallPct = totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0;
@@ -487,10 +489,44 @@ export default function CleaningSchedule() {
     </div>
   );
 
-  // Tabs shown depend on mode
   const tabs = isKidMode
     ? [["tasks", "Tasks"], ["history", "History"]]
     : [["tasks", "Tasks"], ["history", "History"], ["edit", "Edit"]];
+
+  // ── Render task row (shared between frequency and room layouts) ────────────
+  function renderTaskRow(task, roomId, freq, index, fullTaskList, borderStyle) {
+    const fi = fullTaskList.findIndex(ft => ft.text === task.text);
+    const key = roomId + "-" + freq + "-" + fi;
+    const completion = completions[key], done = !!completion;
+    const member = done ? FAMILY.find(f => f.id === completion.by) : null;
+    const fmr = freqMeta[freq];
+    return (
+      <div key={key + index} onClick={() => toggleTask(key, freq)} style={{ padding: "10px 14px", borderBottom: borderStyle, cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid " + (done ? completion.color : "#CCC"), background: done ? completion.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 13, color: done ? "#AAA" : fmr.text, textDecoration: done ? "line-through" : "none" }}>{task.text}</span>
+            {!isKidMode && task.assignees?.length > 0 && (
+              <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
+                {task.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null; })}
+              </div>
+            )}
+          </div>
+          {done && member && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+              <Avatar member={member} size={24} fontSize={11} />
+              <div style={{ textAlign: "right" }}>
+                <p style={{ margin: 0, fontSize: 10, color: completion.color, fontWeight: "bold", lineHeight: 1.2 }}>{completion.name}</p>
+                <p style={{ margin: 0, fontSize: 9, color: "#CCC", lineHeight: 1.2 }}>{fmt(completion.at)}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }}>
@@ -508,11 +544,11 @@ export default function CleaningSchedule() {
         </div>
         <p style={{ fontSize: 11, color: "#555", margin: "8px 0 0" }}>
           Completing as <strong style={{ color: activeMember.color }}>{activeMember.name}</strong>
-          {isKidMode && <span style={{ marginLeft: 6, fontSize: 10, color: "#6DB894", background: "#1E3A2A", padding: "1px 8px", borderRadius: 10 }}>My Tasks Only</span>}
+          {isKidMode && <span style={{ marginLeft: 8, fontSize: 10, color: "#6DB894", background: "#1A3025", padding: "2px 8px", borderRadius: 10 }}>My Tasks</span>}
         </p>
       </div>
 
-      {/* VIEW TOGGLE */}
+      {/* TABS */}
       <div style={{ display: "flex", background: "#111", borderTop: "1px solid #2A2A2A" }}>
         {tabs.map(([v,label]) => (
           <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "10px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: view === v ? "#F5F2EC" : "#555", borderBottom: view === v ? "2px solid #F5F2EC" : "2px solid transparent", textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</button>
@@ -523,7 +559,6 @@ export default function CleaningSchedule() {
       {view === "history" && (
         <div style={{ paddingBottom: 60 }}>
           <div style={{ background: "#fff", borderBottom: "1px solid #E4E0D8", padding: "16px" }}>
-
             <div style={{ marginBottom: 14 }}>
               <label style={labelStyle}>Report Period</label>
               <select value={reportType} onChange={e => { setReportType(e.target.value); setReportResults(null); }} style={selectStyle}>
@@ -534,61 +569,18 @@ export default function CleaningSchedule() {
                 <option value="custom">Custom Date Range</option>
               </select>
             </div>
-
             {reportType === "custom" && (
               <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>From</label>
-                  <input type="date" value={reportDateFrom} onChange={e => { setReportDateFrom(e.target.value); setReportResults(null); }} style={selectStyle} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={labelStyle}>To</label>
-                  <input type="date" value={reportDateTo} onChange={e => { setReportDateTo(e.target.value); setReportResults(null); }} style={selectStyle} />
-                </div>
+                <div style={{ flex: 1 }}><label style={labelStyle}>From</label><input type="date" value={reportDateFrom} onChange={e => { setReportDateFrom(e.target.value); setReportResults(null); }} style={selectStyle} /></div>
+                <div style={{ flex: 1 }}><label style={labelStyle}>To</label><input type="date" value={reportDateTo} onChange={e => { setReportDateTo(e.target.value); setReportResults(null); }} style={selectStyle} /></div>
               </div>
             )}
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>Floor</label>
-              <select value={filterFloor} onChange={e => { setFilterFloor(e.target.value); setFilterRoom("all"); setReportResults(null); }} style={selectStyle}>
-                <option value="all">All Floors</option>
-                {levels.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
-              </select>
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>Room</label>
-              <select value={filterRoom} onChange={e => { setFilterRoom(e.target.value); setReportResults(null); }} style={selectStyle}>
-                <option value="all">All Rooms</option>
-                {availableRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>Frequency</label>
-              <select value={filterFreq} onChange={e => { setFilterFreq(e.target.value); setReportResults(null); }} style={selectStyle}>
-                <option value="all">All Frequencies</option>
-                {frequencies.map(f => <option key={f} value={f}>{f}</option>)}
-              </select>
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>Completed By</label>
-              <select value={filterCompleted} onChange={e => { setFilterCompleted(e.target.value); setReportResults(null); }} style={selectStyle}>
-                <option value="all">Anyone</option>
-                {FAMILY.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-            </div>
-
-            <div style={{ marginBottom: 18 }}>
-              <label style={labelStyle}>Assigned To</label>
-              <select value={filterAssigned} onChange={e => { setFilterAssigned(e.target.value); setReportResults(null); }} style={selectStyle}>
-                <option value="all">Anyone</option>
-                {FAMILY.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-            </div>
-
-            <button onClick={runReport} disabled={archiveLoading} style={{ width: "100%", padding: "12px", background: archiveLoading ? "#CCC" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 10, cursor: archiveLoading ? "not-allowed" : "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: "bold", letterSpacing: "0.04em" }}>
+            <div style={{ marginBottom: 14 }}><label style={labelStyle}>Floor</label><select value={filterFloor} onChange={e => { setFilterFloor(e.target.value); setFilterRoom("all"); setReportResults(null); }} style={selectStyle}><option value="all">All Floors</option>{levels.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}</select></div>
+            <div style={{ marginBottom: 14 }}><label style={labelStyle}>Room</label><select value={filterRoom} onChange={e => { setFilterRoom(e.target.value); setReportResults(null); }} style={selectStyle}><option value="all">All Rooms</option>{availableRooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+            <div style={{ marginBottom: 14 }}><label style={labelStyle}>Frequency</label><select value={filterFreq} onChange={e => { setFilterFreq(e.target.value); setReportResults(null); }} style={selectStyle}><option value="all">All Frequencies</option>{frequencies.map(f => <option key={f} value={f}>{f}</option>)}</select></div>
+            <div style={{ marginBottom: 14 }}><label style={labelStyle}>Completed By</label><select value={filterCompleted} onChange={e => { setFilterCompleted(e.target.value); setReportResults(null); }} style={selectStyle}><option value="all">Anyone</option>{FAMILY.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
+            <div style={{ marginBottom: 18 }}><label style={labelStyle}>Assigned To</label><select value={filterAssigned} onChange={e => { setFilterAssigned(e.target.value); setReportResults(null); }} style={selectStyle}><option value="all">Anyone</option>{FAMILY.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
+            <button onClick={runReport} disabled={archiveLoading} style={{ width: "100%", padding: "12px", background: archiveLoading ? "#CCC" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 10, cursor: archiveLoading ? "not-allowed" : "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: "bold" }}>
               {archiveLoading ? "Loading data..." : "Run Report"}
             </button>
           </div>
@@ -597,87 +589,50 @@ export default function CleaningSchedule() {
             <div style={{ padding: "14px 14px 0" }}>
               <p style={{ fontSize: 11, color: "#AAA", margin: "0 0 10px", fontStyle: "italic" }}>
                 {new Date(reportResults.from + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
-                {reportResults.from !== reportResults.to && " — " + new Date(reportResults.to + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                {reportResults.from !== reportResults.to && " - " + new Date(reportResults.to + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
               </p>
-
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #E8F5EE", textAlign: "center" }}>
-                  <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#6DB894" }}>{totalCompleted}</p>
-                  <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>completed</p>
-                </div>
-                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #EBF4FC", textAlign: "center" }}>
-                  <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#5B9BD5" }}>{Object.keys(byPerson).length}</p>
-                  <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>contributors</p>
-                </div>
-                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #F2EBF9", textAlign: "center" }}>
-                  <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#A67DC4" }}>{new Set(reportResults.items.map(i => i.roomId)).size}</p>
-                  <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>rooms</p>
-                </div>
+                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #E8F5EE", textAlign: "center" }}><p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#6DB894" }}>{totalCompleted}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>completed</p></div>
+                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #EBF4FC", textAlign: "center" }}><p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#5B9BD5" }}>{Object.keys(byPerson).length}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>contributors</p></div>
+                <div style={{ flex: 1, background: "#fff", borderRadius: 10, padding: "12px", border: "1px solid #F2EBF9", textAlign: "center" }}><p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: "#A67DC4" }}>{new Set(reportResults.items.map(i => i.roomId)).size}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>rooms</p></div>
               </div>
-
               {totalCompleted > 0 && (
                 <div style={{ background: "#fff", borderRadius: 10, padding: "12px 14px", border: "1px solid #E4E0D8", marginBottom: 14 }}>
-                  <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>By person</p>
+                  <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase" }}>By person</p>
                   <div style={{ display: "flex", height: 8, borderRadius: 6, overflow: "hidden", marginBottom: 8 }}>
-                    {FAMILY.map(m => { const count = byPerson[m.id] || 0; if (!count) return null; return <div key={m.id} style={{ width: Math.round(count/totalCompleted*100)+"%", background: m.color }} />; })}
+                    {FAMILY.map(m => { const c = byPerson[m.id] || 0; if (!c) return null; return <div key={m.id} style={{ width: Math.round(c/totalCompleted*100)+"%", background: m.color }} />; })}
                   </div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    {FAMILY.map(m => { const count = byPerson[m.id] || 0; if (!count) return null; return (
-                      <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        <Avatar member={m} size={18} fontSize={9} />
-                        <span style={{ fontSize: 11, color: m.color, fontWeight: "bold" }}>{m.name}</span>
-                        <span style={{ fontSize: 11, color: "#AAA" }}>{count}</span>
-                      </div>
-                    ); })}
+                    {FAMILY.map(m => { const c = byPerson[m.id] || 0; if (!c) return null; return <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}><Avatar member={m} size={18} fontSize={9} /><span style={{ fontSize: 11, color: m.color, fontWeight: "bold" }}>{m.name}</span><span style={{ fontSize: 11, color: "#AAA" }}>{c}</span></div>; })}
                   </div>
                 </div>
               )}
-
               {totalCompleted === 0 ? (
-                <div style={{ textAlign: "center", padding: "30px 0" }}>
-                  <p style={{ fontSize: 14, color: "#CCC" }}>No completed tasks match these filters.</p>
-                  <p style={{ fontSize: 12, color: "#CCC", fontStyle: "italic" }}>Try a wider date range or fewer filters.</p>
-                </div>
-              ) : (
-                reportResults.items.map((item, idx) => {
-                  const member = FAMILY.find(f => f.id === item.by);
-                  const fmr = freqMeta[item.freq] || freqMeta.Daily;
-                  const level = levels.find(l => l.rooms.some(r => r.id === item.roomId));
-                  return (
-                    <div key={item.key + idx} style={{ marginBottom: 8, background: "#fff", borderRadius: 10, border: "1px solid #E4E0D8" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px" }}>
-                        <div style={{ width: 18, height: 18, borderRadius: "50%", background: item.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                          <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ margin: 0, fontSize: 13, color: "#1A1A1A" }}>{item.task}</p>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
-                            <span style={{ fontSize: 10, color: "#888" }}><RoomIcon icon={allRooms.find(r=>r.id===item.roomId)?.icon} size={10} /> {item.roomName}</span>
-                            {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold" }}>{level.label}</span>}
-                            <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, background: fmr.bg, color: fmr.text, fontWeight: "bold" }}>{item.freq}</span>
-                            <span style={{ fontSize: 10, color: "#CCC" }}>{fmt(item.at)}</span>
-                          </div>
-                          {item.assignees?.length > 0 && (
-                            <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
-                              <span style={{ fontSize: 9, color: "#BBB" }}>Assigned:</span>
-                              {item.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null; })}
-                            </div>
-                          )}
-                        </div>
-                        {member && (
-                          <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                            <Avatar member={member} size={24} fontSize={11} />
-                            <div>
-                              <p style={{ margin: 0, fontSize: 10, color: item.color, fontWeight: "bold", lineHeight: 1.2 }}>{item.name}</p>
-                              <p style={{ margin: 0, fontSize: 9, color: "#CCC", lineHeight: 1.2 }}>completed</p>
-                            </div>
-                          </div>
-                        )}
+                <div style={{ textAlign: "center", padding: "30px 0" }}><p style={{ fontSize: 14, color: "#CCC" }}>No completed tasks match these filters.</p><p style={{ fontSize: 12, color: "#CCC", fontStyle: "italic" }}>Try a wider date range or fewer filters.</p></div>
+              ) : reportResults.items.map((item, idx) => {
+                const member = FAMILY.find(f => f.id === item.by), fmr = freqMeta[item.freq] || freqMeta.Daily;
+                const level = levels.find(l => l.rooms.some(r => r.id === item.roomId));
+                return (
+                  <div key={item.key + idx} style={{ marginBottom: 8, background: "#fff", borderRadius: 10, border: "1px solid #E4E0D8" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px" }}>
+                      <div style={{ width: 18, height: 18, borderRadius: "50%", background: item.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ margin: 0, fontSize: 13 }}>{item.task}</p>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 10, color: "#888" }}><RoomIcon icon={allRooms.find(r=>r.id===item.roomId)?.icon} size={10} /> {item.roomName}</span>
+                          {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold" }}>{level.label}</span>}
+                          <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, background: fmr.bg, color: fmr.text, fontWeight: "bold" }}>{item.freq}</span>
+                          <span style={{ fontSize: 10, color: "#CCC" }}>{fmt(item.at)}</span>
+                        </div>
+                        {item.assignees?.length > 0 && <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}><span style={{ fontSize: 9, color: "#BBB" }}>Assigned:</span>{item.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null; })}</div>}
+                      </div>
+                      {member && <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}><Avatar member={member} size={24} fontSize={11} /><div><p style={{ margin: 0, fontSize: 10, color: item.color, fontWeight: "bold", lineHeight: 1.2 }}>{item.name}</p><p style={{ margin: 0, fontSize: 9, color: "#CCC", lineHeight: 1.2 }}>completed</p></div></div>}
                     </div>
-                  );
-                })
-              )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -715,29 +670,27 @@ export default function CleaningSchedule() {
 
           {taskLayout === "room" && (
             <div style={{ borderBottom: "1px solid #DDD8CE" }}>
-              {levels.map(lv => (
-                <div key={lv.id}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 16px 4px", borderLeft: "3px solid " + lv.color, background: "#ECEAE3" }}>
-                    <span style={{ fontSize: 12 }}>{lv.icon}</span>
-                    <span style={{ fontSize: 10, fontWeight: "bold", color: lv.color, textTransform: "uppercase" }}>{lv.label}</span>
-                  </div>
-                  <div style={{ display: "flex", gap: 6, padding: "6px 12px", overflowX: "auto" }}>
-                    {lv.rooms.map(room => {
-                      // In kid mode, hide rooms that have no tasks assigned to this kid
-                      if (isKidMode) {
-                        const hasAny = frequencies.some(f => getMergedTasks(room.id, f, activeMember.id).length > 0);
-                        if (!hasAny) return null;
-                      }
-                      const isActive = activeRoom.id === room.id;
-                      return (
+              {levels.map(lv => {
+                const visibleRooms = lv.rooms.filter(room =>
+                  frequencies.some(f => getVisibleTasks(room.id, f, activeMember.id).length > 0)
+                );
+                if (visibleRooms.length === 0) return null;
+                return (
+                  <div key={lv.id}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 16px 4px", borderLeft: "3px solid " + lv.color, background: "#ECEAE3" }}>
+                      <span style={{ fontSize: 12 }}>{lv.icon}</span>
+                      <span style={{ fontSize: 10, fontWeight: "bold", color: lv.color, textTransform: "uppercase" }}>{lv.label}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, padding: "6px 12px", overflowX: "auto" }}>
+                      {visibleRooms.map(room => { const isActive = activeRoom.id === room.id; return (
                         <button key={room.id} onClick={() => setActiveRoom(room)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 16, border: "1px solid " + (isActive ? lv.color : "#DDD8CE"), background: isActive ? lv.color : "#fff", color: isActive ? "#fff" : "#555", cursor: "pointer", fontFamily: "inherit", fontSize: 11, whiteSpace: "nowrap", flexShrink: 0 }}>
                           <RoomIcon icon={room.icon} size={13} /><span>{room.name}</span>
                         </button>
-                      );
-                    })}
+                      ); })}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -746,80 +699,46 @@ export default function CleaningSchedule() {
         {taskLayout === "frequency" && (
           <div style={{ padding: "12px 0 48px" }}>
             {levels.map(lv => {
-              const visibleRooms = lv.rooms.filter(room => {
-                const tasks = getMergedTasks(room.id, activeFreq, isKidMode ? activeMember.id : null);
-                return !isKidMode || tasks.length > 0;
-              });
-              if (isKidMode && visibleRooms.length === 0) return null;
+              const levelRooms = lv.rooms.filter(room => getVisibleTasks(room.id, activeFreq, activeMember.id).length > 0);
+              if (isKidMode && levelRooms.length === 0) return null;
               return (
                 <div key={lv.id} style={{ marginBottom: 6 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 20px", background: "#ECEAE3", borderLeft: "4px solid " + lv.color }}>
                     <span style={{ fontSize: 15 }}>{lv.icon}</span>
                     <span style={{ fontSize: 11, fontWeight: "bold", color: lv.color, textTransform: "uppercase" }}>{lv.label}</span>
+                    {!isKidMode && levelRooms.length === 0 && <span style={{ fontSize: 10, color: "#BBB", fontStyle: "italic" }}>no {activeFreq.toLowerCase()} tasks</span>}
                   </div>
                   <div style={{ padding: "6px 12px 2px" }}>
                     {lv.rooms.map(room => {
-                      const tasks = getMergedTasks(room.id, activeFreq, isKidMode ? activeMember.id : null);
-                      if (isKidMode && tasks.length === 0) return null;
-                      // Get the original indices for these tasks so completions keys are correct
+                      const visibleTasks = getVisibleTasks(room.id, activeFreq, activeMember.id);
                       const fullTaskList = getTaskList(room.id, activeFreq);
+                      if (isKidMode && visibleTasks.length === 0) return null;
                       const colKey = room.id + "-" + activeFreq, isOpen = !collapsed[colKey];
-                      const doneCount = tasks.filter(t => {
+                      const doneCount = visibleTasks.filter(t => {
                         const fi = fullTaskList.findIndex(ft => ft.text === t.text);
                         return fi !== -1 && completions[room.id + "-" + activeFreq + "-" + fi];
                       }).length;
-                      const roomPct = tasks.length ? Math.round(doneCount / tasks.length * 100) : 0;
-                      const allDone = tasks.length > 0 && doneCount === tasks.length;
+                      const roomPct = visibleTasks.length ? Math.round(doneCount / visibleTasks.length * 100) : 0;
+                      const allDone = visibleTasks.length > 0 && doneCount === visibleTasks.length;
                       return (
-                        <div key={room.id} style={{ marginBottom: 7, borderRadius: 10, overflow: "hidden", border: "1px solid " + (tasks.length > 0 ? fm.border : "#E4E0D8"), opacity: tasks.length === 0 ? 0.5 : 1 }}>
-                          <div onClick={() => tasks.length > 0 && toggleRoom(colKey)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: allDone ? fm.bg : "#fff", cursor: tasks.length > 0 ? "pointer" : "default" }}>
+                        <div key={room.id} style={{ marginBottom: 7, borderRadius: 10, overflow: "hidden", border: "1px solid " + (visibleTasks.length > 0 ? fm.border : "#E4E0D8"), opacity: visibleTasks.length === 0 ? 0.5 : 1 }}>
+                          <div onClick={() => visibleTasks.length > 0 && toggleRoom(colKey)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: allDone ? fm.bg : "#fff", cursor: visibleTasks.length > 0 ? "pointer" : "default" }}>
                             <RoomIcon icon={room.icon} size={17} />
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                                <span style={{ fontSize: 13, fontWeight: "bold", color: tasks.length === 0 ? "#CCC" : "#1A1A1A" }}>{room.name}</span>
+                                <span style={{ fontSize: 13, fontWeight: "bold", color: visibleTasks.length === 0 ? "#CCC" : "#1A1A1A" }}>{room.name}</span>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                                  {tasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fm.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount + "/" + tasks.length}</span>}
-                                  {tasks.length > 0 && <span style={{ fontSize: 11, color: "#CCC", display: "inline-block", transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}>v</span>}
+                                  {visibleTasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fm.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount + "/" + visibleTasks.length}</span>}
+                                  {visibleTasks.length > 0 && <span style={{ fontSize: 11, color: "#CCC", display: "inline-block", transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}>v</span>}
                                 </div>
                               </div>
-                              {tasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct + "%", background: fm.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
-                              {tasks.length === 0 && <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>No {activeFreq.toLowerCase()} tasks</span>}
+                              {visibleTasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct + "%", background: fm.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
+                              {visibleTasks.length === 0 && <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>No {activeFreq.toLowerCase()} tasks</span>}
                             </div>
                           </div>
-                          {tasks.length > 0 && isOpen && (
+                          {visibleTasks.length > 0 && isOpen && (
                             <div style={{ borderTop: "1px solid " + fm.border, background: fm.lightBg }}>
-                              {tasks.map((task, idx) => {
-                                const fullIndex = fullTaskList.findIndex(ft => ft.text === task.text);
-                                const key = room.id + "-" + activeFreq + "-" + fullIndex;
-                                const completion = completions[key], done = !!completion;
-                                const member = done ? FAMILY.find(f => f.id === completion.by) : null;
-                                return (
-                                  <div key={key + idx} onClick={() => toggleTask(key, activeFreq)} style={{ padding: "10px 14px", borderBottom: idx < tasks.length - 1 ? "1px solid " + fm.border : "none", cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                                      <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid " + (done ? completion.color : "#CCC"), background: done ? completion.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                        {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                                      </div>
-                                      <div style={{ flex: 1, minWidth: 0 }}>
-                                        <span style={{ fontSize: 13, color: done ? "#AAA" : fm.text, textDecoration: done ? "line-through" : "none" }}>{task.text}</span>
-                                        {task.assignees?.length > 0 && (
-                                          <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
-                                            {task.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null; })}
-                                          </div>
-                                        )}
-                                      </div>
-                                      {done && member && (
-                                        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                          <Avatar member={member} size={24} fontSize={11} />
-                                          <div style={{ textAlign: "right" }}>
-                                            <p style={{ margin: 0, fontSize: 10, color: completion.color, fontWeight: "bold", lineHeight: 1.2 }}>{completion.name}</p>
-                                            <p style={{ margin: 0, fontSize: 9, color: "#CCC", lineHeight: 1.2 }}>{fmt(completion.at)}</p>
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
+                              {visibleTasks.map((task, idx) => renderTaskRow(task, room.id, activeFreq, idx, fullTaskList, idx < visibleTasks.length - 1 ? "1px solid " + fm.border : "none"))}
                             </div>
                           )}
                         </div>
@@ -830,10 +749,10 @@ export default function CleaningSchedule() {
               );
             })}
             {isKidMode && totalTasks === 0 && (
-              <div style={{ textAlign: "center", padding: "40px 20px" }}>
-                <p style={{ fontSize: 20, margin: "0 0 8px" }}>🎉</p>
-                <p style={{ fontSize: 14, color: "#6DB894", fontWeight: "bold", margin: 0 }}>No {activeFreq.toLowerCase()} tasks assigned!</p>
-                <p style={{ fontSize: 12, color: "#AAA", margin: "4px 0 0" }}>Check another frequency or enjoy your free time.</p>
+              <div style={{ textAlign: "center", padding: "50px 20px" }}>
+                <p style={{ fontSize: 28, margin: "0 0 10px" }}>🎉</p>
+                <p style={{ fontSize: 15, color: "#6DB894", fontWeight: "bold", margin: 0 }}>No {activeFreq.toLowerCase()} tasks!</p>
+                <p style={{ fontSize: 12, color: "#AAA", margin: "6px 0 0" }}>Try another tab or enjoy your free time.</p>
               </div>
             )}
           </div>
@@ -843,66 +762,35 @@ export default function CleaningSchedule() {
         {taskLayout === "room" && (
           <div style={{ padding: "12px 12px 48px" }}>
             {frequencies.map(freq => {
-              const tasks = getMergedTasks(activeRoom.id, freq, isKidMode ? activeMember.id : null);
-              if (isKidMode && tasks.length === 0) return null;
+              const visibleTasks = getVisibleTasks(activeRoom.id, freq, activeMember.id);
               const fullTaskList = getTaskList(activeRoom.id, freq);
+              if (isKidMode && visibleTasks.length === 0) return null;
               const fmr = freqMeta[freq], colKey = "room-" + activeRoom.id + "-" + freq, isOpen = !collapsed[colKey];
-              const doneCount = tasks.filter(t => {
+              const doneCount = visibleTasks.filter(t => {
                 const fi = fullTaskList.findIndex(ft => ft.text === t.text);
                 return fi !== -1 && completions[activeRoom.id + "-" + freq + "-" + fi];
               }).length;
-              const roomPct = tasks.length ? Math.round(doneCount / tasks.length * 100) : 0;
-              const allDone = tasks.length > 0 && doneCount === tasks.length;
+              const roomPct = visibleTasks.length ? Math.round(doneCount / visibleTasks.length * 100) : 0;
+              const allDone = visibleTasks.length > 0 && doneCount === visibleTasks.length;
               return (
-                <div key={freq} style={{ marginBottom: 10, borderRadius: 10, overflow: "hidden", border: "1px solid " + (tasks.length > 0 ? fmr.border : "#E4E0D8"), opacity: tasks.length === 0 ? 0.4 : 1 }}>
-                  <div onClick={() => tasks.length > 0 && toggleRoom(colKey)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: allDone ? fmr.bg : "#fff", cursor: tasks.length > 0 ? "pointer" : "default" }}>
+                <div key={freq} style={{ marginBottom: 10, borderRadius: 10, overflow: "hidden", border: "1px solid " + (visibleTasks.length > 0 ? fmr.border : "#E4E0D8"), opacity: visibleTasks.length === 0 ? 0.4 : 1 }}>
+                  <div onClick={() => visibleTasks.length > 0 && toggleRoom(colKey)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", background: allDone ? fmr.bg : "#fff", cursor: visibleTasks.length > 0 ? "pointer" : "default" }}>
                     <div style={{ width: 10, height: 10, borderRadius: "50%", background: fmr.dot, flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 11, fontWeight: "bold", color: tasks.length === 0 ? "#CCC" : fmr.text, textTransform: "uppercase" }}>{freq}</span>
+                        <span style={{ fontSize: 11, fontWeight: "bold", color: visibleTasks.length === 0 ? "#CCC" : fmr.text, textTransform: "uppercase" }}>{freq}</span>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          {tasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fmr.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount + "/" + tasks.length}</span>}
-                          {tasks.length > 0 && <span style={{ fontSize: 11, color: "#CCC", display: "inline-block", transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}>v</span>}
+                          {visibleTasks.length > 0 && <span style={{ fontSize: 11, color: allDone ? fmr.text : "#AAA", fontWeight: allDone ? "bold" : "normal" }}>{allDone ? "Done" : doneCount + "/" + visibleTasks.length}</span>}
+                          {visibleTasks.length > 0 && <span style={{ fontSize: 11, color: "#CCC", display: "inline-block", transform: isOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}>v</span>}
                         </div>
                       </div>
-                      {tasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct + "%", background: fmr.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
-                      {tasks.length === 0 && <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>No {freq.toLowerCase()} tasks</span>}
+                      {visibleTasks.length > 0 && <div style={{ height: 3, background: "#F0EDE6", borderRadius: 2, marginTop: 5, overflow: "hidden" }}><div style={{ height: "100%", width: roomPct + "%", background: fmr.dot, borderRadius: 2, transition: "width 0.3s" }} /></div>}
+                      {visibleTasks.length === 0 && <span style={{ fontSize: 11, color: "#CCC", fontStyle: "italic" }}>No {freq.toLowerCase()} tasks</span>}
                     </div>
                   </div>
-                  {tasks.length > 0 && isOpen && (
+                  {visibleTasks.length > 0 && isOpen && (
                     <div style={{ borderTop: "1px solid " + fmr.border, background: fmr.lightBg }}>
-                      {tasks.map((task, idx) => {
-                        const fullIndex = fullTaskList.findIndex(ft => ft.text === task.text);
-                        const key = activeRoom.id + "-" + freq + "-" + fullIndex;
-                        const completion = completions[key], done = !!completion;
-                        const member = done ? FAMILY.find(f => f.id === completion.by) : null;
-                        return (
-                          <div key={key + idx} onClick={() => toggleTask(key, freq)} style={{ padding: "10px 14px", borderBottom: idx < tasks.length - 1 ? "1px solid " + fmr.border : "none", cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                              <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid " + (done ? completion.color : "#CCC"), background: done ? completion.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                              </div>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <span style={{ fontSize: 13, color: done ? "#AAA" : fmr.text, textDecoration: done ? "line-through" : "none" }}>{task.text}</span>
-                                {task.assignees?.length > 0 && (
-                                  <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
-                                    {task.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null; })}
-                                  </div>
-                                )}
-                              </div>
-                              {done && member && (
-                                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                  <Avatar member={member} size={24} fontSize={11} />
-                                  <div style={{ textAlign: "right" }}>
-                                    <p style={{ margin: 0, fontSize: 10, color: completion.color, fontWeight: "bold", lineHeight: 1.2 }}>{completion.name}</p>
-                                    <p style={{ margin: 0, fontSize: 9, color: "#CCC", lineHeight: 1.2 }}>{fmt(completion.at)}</p>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {visibleTasks.map((task, idx) => renderTaskRow(task, activeRoom.id, freq, idx, fullTaskList, idx < visibleTasks.length - 1 ? "1px solid " + fmr.border : "none"))}
                     </div>
                   )}
                 </div>
