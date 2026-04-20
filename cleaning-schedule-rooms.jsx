@@ -414,6 +414,21 @@ export default function CleaningSchedule() {
   function getDateRange() {
     const now = new Date();
     if (reportType === "daily") return { from: today(), to: today() };
+    if (reportType === "yesterday") return { from: daysAgo(1), to: daysAgo(1) };
+    if (reportType === "thisweek") {
+      const day = now.getDay();
+      const sun = new Date(now); sun.setDate(now.getDate() - day);
+      const sat = new Date(sun); sat.setDate(sun.getDate() + 6);
+      const fmt2 = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+      return { from: fmt2(sun), to: fmt2(sat) };
+    }
+    if (reportType === "lastweek") {
+      const day = now.getDay();
+      const lastSun = new Date(now); lastSun.setDate(now.getDate() - day - 7);
+      const lastSat = new Date(lastSun); lastSat.setDate(lastSun.getDate() + 6);
+      const fmt2 = d => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+      return { from: fmt2(lastSun), to: fmt2(lastSat) };
+    }
     if (reportType === "monthly") {
       const y = now.getFullYear(), m = now.getMonth();
       return { from: y+"-"+String(m+1).padStart(2,"0")+"-01", to: y+"-"+String(m+1).padStart(2,"0")+"-"+String(new Date(y,m+1,0).getDate()).padStart(2,"0") };
@@ -545,10 +560,13 @@ export default function CleaningSchedule() {
           <div style={{ background: "#fff", borderBottom: "1px solid #E4E0D8", padding: "16px" }}>
             <div style={{ marginBottom: 14 }}><label style={labelStyle}>Report Period</label>
               <select value={reportType} onChange={e => { setReportType(e.target.value); setReportResults(null); }} style={selectStyle}>
-                <option value="daily">Today (Daily)</option>
+                <option value="daily">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="thisweek">This Week</option>
+                <option value="lastweek">Last Week</option>
                 <option value="monthly">This Month</option>
                 <option value="quarterly">This Quarter</option>
-                <option value="annual">This Year (Annual)</option>
+                <option value="annual">This Year</option>
                 <option value="custom">Custom Date Range</option>
               </select>
             </div>
