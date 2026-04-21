@@ -286,6 +286,7 @@ export default function CleaningSchedule() {
   const [filterCompleted, setFilterCompleted] = useState("all");
   const [filterAssigned, setFilterAssigned] = useState("all");
   const [reportResults, setReportResults] = useState(null);
+  const [expandedCard, setExpandedCard] = useState(null);
 
   const writingRef = useRef(false);
   const isKidMode = activeMember.isKid;
@@ -379,7 +380,7 @@ export default function CleaningSchedule() {
   }, []);
 
   useEffect(() => {
-    if (view !== "history" && view !== "leaderboard") return;
+    if (view !== "history" && view !== "leaderboard" && view !== "status") return;
     async function loadAll() {
       setArchiveLoading(true); setReportResults(null);
       try {
@@ -524,8 +525,8 @@ export default function CleaningSchedule() {
   );
 
   const tabs = isKidMode
-    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["history","History"]]
-    : [["tasks","Tasks"],["leaderboard","Leaderboard"],["history","History"],["edit","Edit"]];
+    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["status","Status"],["history","History"]]
+    : [["tasks","Tasks"],["leaderboard","Leaderboard"],["status","Status"],["history","History"],["edit","Edit"]];
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }} key={activeMember.id}>
@@ -557,162 +558,167 @@ export default function CleaningSchedule() {
       {/* ═══ LEADERBOARD VIEW ═══ */}
       {view === "leaderboard" && (() => {
         const kids = FAMILY.filter(f => f.isKid);
-
-        // Current week range (Sun-Sat)
         const now = new Date();
-        const day = now.getDay();
-        const weekStart = new Date(now); weekStart.setDate(now.getDate() - day); weekStart.setHours(0,0,0,0);
+        const medals = ["🥇","🥈","🥉"];
+
+        // ── Week range ───────────────────────────────────────────────────────
+        const weekDay = now.getDay();
+        const weekStart = new Date(now); weekStart.setDate(now.getDate() - weekDay); weekStart.setHours(0,0,0,0);
         const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23,59,59,999);
         const weekLabel = weekStart.toLocaleDateString([],{month:"short",day:"numeric"}) + " - " + weekEnd.toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
 
-        // Count completions this week per kid
-        const weekCounts = {};
-        kids.forEach(k => { weekCounts[k.id] = 0; });
-        Object.values(completions).forEach(c => {
-          if (!c || !c.at || !c.by) return;
-          if (!kids.find(k => k.id === c.by)) return;
-          const ts = c.at;
-          if (ts >= weekStart.getTime() && ts <= weekEnd.getTime()) {
-            weekCounts[c.by] = (weekCounts[c.by] || 0) + 1;
-          }
-        });
+        // ── Month range ──────────────────────────────────────────────────────
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0, 23, 59, 59, 999);
+        const monthLabel = now.toLocaleDateString([],{month:"long", year:"numeric"});
 
-        // Also pull from archive data for this week
-        Object.values(allArchiveData).forEach(periodData => {
-          Object.values(periodData).forEach(c => {
+        // ── Count all completions (current + archive) ────────────────────────
+        function countInRange(from, to) {
+          const counts = {};
+          kids.forEach(k => { counts[k.id] = 0; });
+          function scan(obj) {
+            Object.values(obj).forEach(c => {
+              if (!c || !c.at || !c.by) return;
+              if (!kids.find(k => k.id === c.by)) return;
+              if (c.at >= from && c.at <= to) counts[c.by] = (counts[c.by]||0) + 1;
+            });
+          }
+          scan(completions);
+          Object.values(allArchiveData).forEach(d => scan(d));
+          return counts;
+        }
+
+        const weekCounts = countInRange(weekStart.getTime(), weekEnd.getTime());
+        const monthCounts = countInRange(monthStart.getTime(), monthEnd.getTime());
+
+        const weekSorted = [...kids].sort((a,b) => (weekCounts[b.id]||0) - (weekCounts[a.id]||0));
+        const monthSorted = [...kids].sort((a,b) => (monthCounts[b.id]||0) - (monthCounts[a.id]||0));
+
+        const weekWinner = weekSorted[0];
+        const weekIsTie = weekSorted.length > 1 && weekCounts[weekSorted[0].id] === weekCounts[weekSorted[1].id] && weekCounts[weekSorted[0].id] > 0;
+        const weekHasActivity = weekSorted.some(k => weekCounts[k.id] > 0);
+        const monthWinner = monthSorted[0];
+        const monthIsTie = monthSorted.length > 1 && monthCounts[monthSorted[0].id] === monthCounts[monthSorted[1].id] && monthCounts[monthSorted[0].id] > 0;
+        const monthHasActivity = monthSorted.some(k => monthCounts[k.id] > 0);
+
+        const weekMax = Math.max(...weekSorted.map(k => weekCounts[k.id]||0), 1);
+        const monthMax = Math.max(...monthSorted.map(k => monthCounts[k.id]||0), 1);
+
+        // ── Daily chart data (Sun-Sat this week) ─────────────────────────────
+        const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+        const dailyData = {};
+        kids.forEach(k => { dailyData[k.id] = Array(7).fill(0); });
+        function scanDaily(obj) {
+          Object.values(obj).forEach(c => {
             if (!c || !c.at || !c.by) return;
             if (!kids.find(k => k.id === c.by)) return;
             if (c.at >= weekStart.getTime() && c.at <= weekEnd.getTime()) {
-              weekCounts[c.by] = (weekCounts[c.by] || 0) + 1;
-            }
-          });
-        });
-
-        // Sort kids by count
-        const sorted = [...kids].sort((a,b) => (weekCounts[b.id]||0) - (weekCounts[a.id]||0));
-        const maxCount = Math.max(...sorted.map(k => weekCounts[k.id]||0), 1);
-        const winner = sorted[0];
-        const isTie = sorted.length > 1 && weekCounts[sorted[0].id] === weekCounts[sorted[1].id] && weekCounts[sorted[0].id] > 0;
-        const hasActivity = sorted.some(k => weekCounts[k.id] > 0);
-
-        // Daily breakdown for chart (Sun-Sat)
-        const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-        const dailyData = {};
-        kids.forEach(k => { dailyData[k.id] = Array(7).fill(0); });
-
-        function addToDaily(completionsObj) {
-          Object.values(completionsObj).forEach(c => {
-            if (!c || !c.at || !c.by) return;
-            if (!kids.find(k => k.id === c.by)) return;
-            const ts = c.at;
-            if (ts >= weekStart.getTime() && ts <= weekEnd.getTime()) {
-              const d = new Date(ts).getDay();
-              dailyData[c.by][d] = (dailyData[c.by][d] || 0) + 1;
+              dailyData[c.by][new Date(c.at).getDay()] += 1;
             }
           });
         }
-        addToDaily(completions);
-        Object.values(allArchiveData).forEach(d => addToDaily(d));
-
+        scanDaily(completions);
+        Object.values(allArchiveData).forEach(d => scanDaily(d));
         const maxDaily = Math.max(...kids.flatMap(k => dailyData[k.id]), 1);
         const todayIdx = now.getDay();
+
+        // ── Horizontal bar chart ─────────────────────────────────────────────
+        function HBar({ sorted, counts, maxVal }) {
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {sorted.map((kid, rank) => {
+                const count = counts[kid.id] || 0;
+                const pct = Math.round(count / maxVal * 100);
+                return (
+                  <div key={kid.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 14, width: 22, textAlign: "center" }}>{count > 0 ? (medals[rank] || "") : ""}</span>
+                    <Avatar member={kid} size={22} fontSize={10} />
+                    <span style={{ fontSize: 12, fontWeight: "bold", color: kid.color, minWidth: 46 }}>{kid.name}</span>
+                    <div style={{ flex: 1, height: 24, background: "#F0EDE6", borderRadius: 6, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: (count === 0 ? 0 : Math.max(pct, 6)) + "%", background: kid.color, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 7, transition: "width 0.6s ease", boxSizing: "border-box" }}>
+                        {count > 0 && <span style={{ fontSize: 10, color: "#fff", fontWeight: "bold" }}>{count}</span>}
+                      </div>
+                    </div>
+                    {count === 0 && <span style={{ fontSize: 11, color: "#CCC", minWidth: 14 }}>0</span>}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }
+
+        // ── Winner banner ────────────────────────────────────────────────────
+        function WinnerBanner({ winner, isTie, hasActivity, counts, sorted, label }) {
+          if (!hasActivity) return (
+            <div style={{ padding: "12px 14px", background: "#FAFAF8", border: "1px solid #E4E0D8", borderRadius: 12, textAlign: "center" }}>
+              <p style={{ margin: 0, fontSize: 12, color: "#CCC" }}>No activity yet</p>
+            </div>
+          );
+          if (isTie) return (
+            <div style={{ padding: "12px 14px", background: "#FEFAEC", border: "1px solid #F0DC7A", borderRadius: 12, display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 22 }}>🤝</span>
+              <div>
+                <p style={{ margin: 0, fontSize: 12, fontWeight: "bold", color: "#7A6010" }}>Tie!</p>
+                <p style={{ margin: "2px 0 0", fontSize: 11, color: "#888" }}>{sorted.filter(k=>counts[k.id]===counts[sorted[0].id]).map(k=>k.name).join(" & ")} — {counts[sorted[0].id]} tasks each</p>
+              </div>
+            </div>
+          );
+          return (
+            <div style={{ padding: "14px", background: winner.color + "15", border: "2px solid " + winner.color + "44", borderRadius: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 26 }}>👑</span>
+                <div style={{ flex: 1 }}>
+                  <p style={{ margin: 0, fontSize: 10, color: winner.color, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: "bold" }}>{label} Leader</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 20, fontWeight: "bold", color: winner.color }}>{winner.name}</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 11, color: "#888" }}>{counts[winner.id]} tasks completed</p>
+                </div>
+                <Avatar member={winner} size={44} fontSize={18} />
+              </div>
+            </div>
+          );
+        }
 
         return (
           <div style={{ paddingBottom: 60 }}>
 
-            {/* Week label */}
-            <div style={{ padding: "12px 16px 0", background: "#F5F2EC" }}>
-              <p style={{ margin: 0, fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.1em" }}>Week of {weekLabel}</p>
+            {/* ── WEEKLY SECTION ── */}
+            <div style={{ padding: "14px 14px 0" }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>This Week</p>
+                <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>{weekLabel}</p>
+              </div>
+              <WinnerBanner winner={weekWinner} isTie={weekIsTie} hasActivity={weekHasActivity} counts={weekCounts} sorted={weekSorted} label="Week" />
             </div>
 
-            {/* Winner banner */}
-            {hasActivity && !isTie && (
-              <div style={{ margin: "12px 14px 0", padding: "16px", background: winner.color + "18", border: "2px solid " + winner.color + "44", borderRadius: 14 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 32 }}>👑</span>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ margin: 0, fontSize: 11, color: winner.color, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: "bold" }}>This Week's Leader</p>
-                    <p style={{ margin: "2px 0 0", fontSize: 22, fontWeight: "bold", color: winner.color }}>{winner.name}</p>
-                    <p style={{ margin: "2px 0 0", fontSize: 12, color: "#888" }}>{weekCounts[winner.id]} tasks completed</p>
-                  </div>
-                  <Avatar member={winner} size={52} fontSize={22} />
-                </div>
-              </div>
-            )}
-            {isTie && (
-              <div style={{ margin: "12px 14px 0", padding: "16px", background: "#FEFAEC", border: "2px solid #F0DC7A", borderRadius: 14 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 28 }}>🤝</span>
-                  <div>
-                    <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color: "#7A6010" }}>It's a tie!</p>
-                    <p style={{ margin: "2px 0 0", fontSize: 12, color: "#888" }}>{sorted.filter(k => weekCounts[k.id] === weekCounts[sorted[0].id]).map(k=>k.name).join(" & ")} are neck and neck with {weekCounts[sorted[0].id]} tasks each</p>
-                  </div>
-                </div>
-              </div>
-            )}
-            {!hasActivity && (
-              <div style={{ margin: "12px 14px 0", padding: "16px", background: "#FAFAF8", border: "1px solid #E4E0D8", borderRadius: 14, textAlign: "center" }}>
-                <p style={{ margin: 0, fontSize: 28 }}>🏁</p>
-                <p style={{ margin: "8px 0 0", fontSize: 14, color: "#AAA" }}>No tasks completed yet this week</p>
-                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#CCC" }}>Get going — the week just started!</p>
-              </div>
-            )}
-
-            {/* Bar chart */}
-            <div style={{ margin: "16px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px 14px 10px" }}>
-              <p style={{ margin: "0 0 12px", fontSize: 11, fontWeight: "bold", color: "#1A1A1A" }}>Tasks Completed This Week</p>
-
-              {/* Horizontal bar chart */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {sorted.map((kid, rank) => {
-                  const count = weekCounts[kid.id] || 0;
-                  const pct = Math.round(count / maxCount * 100);
-                  const medals = ["🥇","🥈","🥉"];
-                  return (
-                    <div key={kid.id}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                        <span style={{ fontSize: 14, width: 20 }}>{count > 0 ? (medals[rank] || "") : ""}</span>
-                        <Avatar member={kid} size={22} fontSize={10} />
-                        <span style={{ fontSize: 12, fontWeight: "bold", color: kid.color, width: 44 }}>{kid.name}</span>
-                        <div style={{ flex: 1, height: 22, background: "#F0EDE6", borderRadius: 6, overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: (count === 0 ? 0 : Math.max(pct, 8)) + "%", background: kid.color, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 6, transition: "width 0.6s ease", boxSizing: "border-box" }}>
-                            {count > 0 && <span style={{ fontSize: 10, color: "#fff", fontWeight: "bold" }}>{count}</span>}
-                          </div>
-                        </div>
-                        {count === 0 && <span style={{ fontSize: 11, color: "#CCC" }}>0</span>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+            {/* Weekly bar chart */}
+            <div style={{ margin: "10px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px" }}>
+              <HBar sorted={weekSorted} counts={weekCounts} maxVal={weekMax} />
             </div>
 
-            {/* Daily activity chart */}
+            {/* ── DAILY CHART ── */}
             <div style={{ margin: "14px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px 14px 10px" }}>
-              <p style={{ margin: "0 0 12px", fontSize: 11, fontWeight: "bold", color: "#1A1A1A" }}>Daily Activity</p>
-              <div style={{ display: "flex", gap: 6 }}>
-                {days.map((dayName, dayIdx) => {
+              <p style={{ margin: "0 0 12px", fontSize: 11, fontWeight: "bold", color: "#1A1A1A" }}>Daily Breakdown This Week</p>
+              <div style={{ display: "flex", gap: 5 }}>
+                {dayNames.map((dayName, dayIdx) => {
                   const isToday = dayIdx === todayIdx;
                   const isFuture = dayIdx > todayIdx;
+                  const dayTotal = kids.reduce((s,k) => s + (dailyData[k.id][dayIdx]||0), 0);
                   return (
                     <div key={dayName} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                      {/* Stacked bars */}
-                      <div style={{ width: "100%", height: 80, display: "flex", flexDirection: "column-reverse", justifyContent: "flex-start", gap: 1, opacity: isFuture ? 0.25 : 1 }}>
+                      <div style={{ width: "100%", height: 90, display: "flex", flexDirection: "column-reverse", justifyContent: "flex-start", gap: 1, opacity: isFuture ? 0.2 : 1 }}>
                         {kids.map(kid => {
                           const count = dailyData[kid.id][dayIdx] || 0;
-                          const h = count === 0 ? 0 : Math.max(Math.round(count / maxDaily * 72), 6);
-                          return (
-                            <div key={kid.id} title={kid.name + ": " + count} style={{ width: "100%", height: h, background: kid.color, borderRadius: 3, transition: "height 0.4s" }} />
-                          );
+                          const h = count === 0 ? 0 : Math.max(Math.round(count / maxDaily * 82), 7);
+                          return <div key={kid.id} style={{ width: "100%", height: h, background: kid.color, borderRadius: 3 }} />;
                         })}
                       </div>
+                      {isToday && <div style={{ width: "100%", height: 2, background: "#1A1A1A", borderRadius: 2 }} />}
                       <span style={{ fontSize: 9, color: isToday ? "#1A1A1A" : "#AAA", fontWeight: isToday ? "bold" : "normal" }}>{dayName}</span>
-                      {isToday && <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#1A1A1A" }} />}
+                      {dayTotal > 0 && !isFuture && <span style={{ fontSize: 9, color: "#888" }}>{dayTotal}</span>}
                     </div>
                   );
                 })}
               </div>
-              {/* Legend */}
               <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
                 {kids.map(kid => (
                   <div key={kid.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -723,41 +729,293 @@ export default function CleaningSchedule() {
               </div>
             </div>
 
-            {/* Individual cards */}
-            <div style={{ margin: "14px 14px 0", display: "flex", flexDirection: "column", gap: 10 }}>
-              {sorted.map((kid, rank) => {
-                const count = weekCounts[kid.id] || 0;
-                const medals = ["🥇","🥈","🥉"];
-                // Get their most recent completion
-                const recentCompletions = Object.values(completions)
-                  .filter(c => c && c.by === kid.id && c.at >= weekStart.getTime())
-                  .sort((a,b) => b.at - a.at);
-                const lastDone = recentCompletions[0];
-                return (
-                  <div key={kid.id} style={{ background: "#fff", borderRadius: 12, border: "1px solid " + kid.color + "44", overflow: "hidden" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: kid.color + "12" }}>
-                      <span style={{ fontSize: 18 }}>{count > 0 ? (medals[rank] || "") : "  "}</span>
-                      <Avatar member={kid} size={32} fontSize={14} />
-                      <div style={{ flex: 1 }}>
-                        <p style={{ margin: 0, fontSize: 14, fontWeight: "bold", color: kid.color }}>{kid.name}</p>
-                        <p style={{ margin: 0, fontSize: 11, color: "#888" }}>{count} task{count !== 1 ? "s" : ""} this week</p>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: kid.color }}>{count}</p>
-                      </div>
-                    </div>
-                    {lastDone && (
-                      <div style={{ padding: "8px 14px", borderTop: "1px solid " + kid.color + "22" }}>
-                        <p style={{ margin: 0, fontSize: 11, color: "#AAA" }}>Last completed <span style={{ color: "#888" }}>{fmt(lastDone.at)}</span></p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            {/* ── MONTHLY SECTION ── */}
+            <div style={{ padding: "18px 14px 0" }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>This Month</p>
+                <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>{monthLabel}</p>
+              </div>
+              <WinnerBanner winner={monthWinner} isTie={monthIsTie} hasActivity={monthHasActivity} counts={monthCounts} sorted={monthSorted} label="Month" />
             </div>
 
-            {/* Footer note */}
-            <p style={{ margin: "14px 14px 0", fontSize: 11, color: "#CCC", fontStyle: "italic", textAlign: "center" }}>Resets every Sunday</p>
+            {/* Monthly bar chart */}
+            <div style={{ margin: "10px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px" }}>
+              <HBar sorted={monthSorted} counts={monthCounts} maxVal={monthMax} />
+            </div>
+
+            <p style={{ margin: "14px 14px 4px", fontSize: 10, color: "#CCC", fontStyle: "italic", textAlign: "center" }}>Weekly standings reset every Sunday</p>
+          </div>
+        );
+      })()}
+
+      {/* ═══ STATUS VIEW ═══ */}
+      {view === "status" && (() => {
+        const now = new Date();
+
+        // ── Time ranges ──────────────────────────────────────────────────────
+        const todayStart = new Date(now); todayStart.setHours(0,0,0,0);
+        const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999);
+
+        const weekDay = now.getDay();
+        const weekStart = new Date(now); weekStart.setDate(now.getDate() - weekDay); weekStart.setHours(0,0,0,0);
+        const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23,59,59,999);
+
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0, 23, 59, 59, 999);
+
+        // ── Count completions & total tasks for a period/freq ────────────────
+        function getStats(fromTs, toTs, freqFilter) {
+          let done = 0, total = 0;
+          const byRoom = {};
+          const byPerson = {};
+          const completedTasks = [];
+
+          // Total possible tasks
+          levels.forEach(lv => lv.rooms.forEach(room => {
+            const freqs = freqFilter ? [freqFilter] : frequencies;
+            freqs.forEach(freq => {
+              const tasks = getTaskList(room.id, freq);
+              total += tasks.length;
+            });
+          }));
+
+          function scan(obj) {
+            Object.entries(obj).forEach(([key, c]) => {
+              if (!c || !c.at) return;
+              if (c.at < fromTs || c.at > toTs) return;
+              if (freqFilter && c.freq !== freqFilter) return;
+              const room = allRooms.find(r => key.startsWith(r.id + "-"));
+              if (!room) return;
+              const taskIndex = parseInt(key.split("-").pop());
+              const taskList = getTaskList(room.id, c.freq);
+              const taskObj = taskList[taskIndex];
+              if (!taskObj) return;
+              done++;
+              byRoom[room.id] = (byRoom[room.id] || { name: room.name, icon: room.icon, count: 0 });
+              byRoom[room.id].count++;
+              byPerson[c.by] = (byPerson[c.by] || { name: c.name, color: c.color, count: 0 });
+              byPerson[c.by].count++;
+              completedTasks.push({ task: taskObj.text, room: room.name, by: c.name, color: c.color, at: c.at, freq: c.freq });
+            });
+          }
+          scan(completions);
+          Object.values(allArchiveData).forEach(d => scan(d));
+          completedTasks.sort((a,b) => b.at - a.at);
+          return { done, total, byRoom, byPerson, completedTasks };
+        }
+
+        // ── Daily chart: tasks per hour today ───────────────────────────────
+        const hourlyData = Array(24).fill(0);
+        function scanHourly(obj) {
+          Object.values(obj).forEach(c => {
+            if (!c || !c.at) return;
+            if (c.at < todayStart.getTime() || c.at > todayEnd.getTime()) return;
+            hourlyData[new Date(c.at).getHours()]++;
+          });
+        }
+        scanHourly(completions);
+        Object.values(allArchiveData).forEach(d => scanHourly(d));
+        const maxHourly = Math.max(...hourlyData, 1);
+        const currentHour = now.getHours();
+
+        // ── Weekly chart: tasks per day ──────────────────────────────────────
+        const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+        const weeklyDayData = Array(7).fill(0);
+        function scanWeeklyDay(obj) {
+          Object.values(obj).forEach(c => {
+            if (!c || !c.at) return;
+            if (c.at < weekStart.getTime() || c.at > weekEnd.getTime()) return;
+            weeklyDayData[new Date(c.at).getDay()]++;
+          });
+        }
+        scanWeeklyDay(completions);
+        Object.values(allArchiveData).forEach(d => scanWeeklyDay(d));
+        const maxWeeklyDay = Math.max(...weeklyDayData, 1);
+
+        // ── Monthly chart: tasks per day of month ────────────────────────────
+        const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+        const monthlyDayData = Array(daysInMonth).fill(0);
+        function scanMonthlyDay(obj) {
+          Object.values(obj).forEach(c => {
+            if (!c || !c.at) return;
+            if (c.at < monthStart.getTime() || c.at > monthEnd.getTime()) return;
+            monthlyDayData[new Date(c.at).getDate() - 1]++;
+          });
+        }
+        scanMonthlyDay(completions);
+        Object.values(allArchiveData).forEach(d => scanMonthlyDay(d));
+        const maxMonthlyDay = Math.max(...monthlyDayData, 1);
+        const todayOfMonth = now.getDate();
+
+        const dailyStats = getStats(todayStart.getTime(), todayEnd.getTime(), "Daily");
+        const weeklyStats = getStats(weekStart.getTime(), weekEnd.getTime(), "Weekly");
+        const monthlyStats = getStats(monthStart.getTime(), monthEnd.getTime(), "Monthly");
+
+        // ── Card component ───────────────────────────────────────────────────
+        function StatusCard({ id, title, period, stats, color, dot, children, detailContent }) {
+          const pct = stats.total ? Math.round(stats.done / stats.total * 100) : 0;
+          const isExpanded = expandedCard === id;
+          return (
+            <div style={{ marginBottom: 12, borderRadius: 14, overflow: "hidden", border: "1px solid " + color + "44", background: "#fff" }}>
+              <div onClick={() => setExpandedCard(isExpanded ? null : id)} style={{ padding: "14px 16px", cursor: "pointer", background: isExpanded ? color + "10" : "#fff" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div>
+                    <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>{title}</p>
+                    <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{period}</p>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color }}>{stats.done}</p>
+                    <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>of {stats.total} done</p>
+                  </div>
+                </div>
+                {/* Progress bar */}
+                <div style={{ height: 6, background: "#F0EDE6", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
+                  <div style={{ height: "100%", width: pct + "%", background: color, borderRadius: 4, transition: "width 0.5s" }} />
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color }}>{pct}% complete</span>
+                  <span style={{ fontSize: 11, color: isExpanded ? color : "#CCC" }}>{isExpanded ? "▲ Less" : "▼ Details"}</span>
+                </div>
+                {/* Mini chart */}
+                {children}
+              </div>
+              {/* Expanded detail */}
+              {isExpanded && (
+                <div style={{ borderTop: "1px solid " + color + "33", padding: "14px 16px", background: color + "06" }}>
+                  {detailContent}
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        // ── Detail panel content ─────────────────────────────────────────────
+        function DetailContent({ stats, color }) {
+          const topRooms = Object.values(stats.byRoom).sort((a,b) => b.count - a.count).slice(0,5);
+          const topPeople = Object.values(stats.byPerson).sort((a,b) => b.count - a.count);
+          const recent = stats.completedTasks.slice(0,8);
+          return (
+            <div>
+              {topPeople.length > 0 && (<>
+                <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>By Person</p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                  {topPeople.map(p => {
+                    const member = FAMILY.find(f => f.name === p.name);
+                    return (
+                      <div key={p.name} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", padding: "6px 10px", borderRadius: 10, border: "1px solid " + (p.color || color) + "33" }}>
+                        {member && <Avatar member={member} size={20} fontSize={9} />}
+                        <span style={{ fontSize: 12, fontWeight: "bold", color: p.color || color }}>{p.name}</span>
+                        <span style={{ fontSize: 12, color: "#AAA" }}>{p.count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>)}
+              {topRooms.length > 0 && (<>
+                <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>Top Rooms</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+                  {topRooms.map(r => (
+                    <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <RoomIcon icon={r.icon} size={14} />
+                      <span style={{ fontSize: 12, color: "#555", flex: 1 }}>{r.name}</span>
+                      <div style={{ width: 80, height: 8, background: "#F0EDE6", borderRadius: 4, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: Math.round(r.count / topRooms[0].count * 100) + "%", background: color, borderRadius: 4 }} />
+                      </div>
+                      <span style={{ fontSize: 11, color: "#888", minWidth: 16, textAlign: "right" }}>{r.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+              {recent.length > 0 && (<>
+                <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>Recent Completions</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {recent.map((t,i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "#fff", borderRadius: 8, border: "1px solid #F0EDE6" }}>
+                      <div style={{ width: 14, height: 14, borderRadius: "50%", background: t.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <svg width="7" height="5" viewBox="0 0 7 5" fill="none"><path d="M1 2.5L2.5 4L6 1" stroke="#fff" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </div>
+                      <span style={{ flex: 1, fontSize: 11, color: "#333" }}>{t.task}</span>
+                      <span style={{ fontSize: 10, color: t.color, fontWeight: "bold", flexShrink: 0 }}>{t.by}</span>
+                      <span style={{ fontSize: 9, color: "#CCC", flexShrink: 0 }}>{fmt(t.at)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+              {stats.done === 0 && <p style={{ margin: 0, fontSize: 12, color: "#CCC", fontStyle: "italic", textAlign: "center", padding: "8px 0" }}>No completions in this period yet.</p>}
+            </div>
+          );
+        }
+
+        return (
+          <div style={{ padding: "14px 14px 60px" }}>
+            <p style={{ margin: "0 0 14px", fontSize: 10, color: "#AAA", fontStyle: "italic" }}>Tap any card to see details</p>
+
+            {/* DAILY */}
+            <StatusCard
+              id="daily"
+              title="Today's Progress"
+              period={now.toLocaleDateString([],{weekday:"long",month:"long",day:"numeric"})}
+              stats={dailyStats}
+              color="#E8C547"
+              detailContent={<DetailContent stats={dailyStats} color="#E8C547" />}
+            >
+              {/* Hourly mini chart */}
+              <div style={{ display: "flex", gap: 1, alignItems: "flex-end", height: 28, marginTop: 10 }}>
+                {hourlyData.map((count, hr) => {
+                  const h = count === 0 ? 2 : Math.max(Math.round(count / maxHourly * 26), 4);
+                  const isPast = hr <= currentHour;
+                  return <div key={hr} style={{ flex: 1, height: h, background: isPast ? "#E8C547" : "#F0EDE6", borderRadius: 2, opacity: hr === currentHour ? 1 : isPast ? 0.7 : 0.3 }} />;
+                })}
+              </div>
+              <p style={{ margin: "4px 0 0", fontSize: 9, color: "#AAA" }}>Tasks by hour today</p>
+            </StatusCard>
+
+            {/* WEEKLY */}
+            <StatusCard
+              id="weekly"
+              title="This Week"
+              period={weekStart.toLocaleDateString([],{month:"short",day:"numeric"}) + " - " + weekEnd.toLocaleDateString([],{month:"short",day:"numeric"})}
+              stats={weeklyStats}
+              color="#5B9BD5"
+              detailContent={<DetailContent stats={weeklyStats} color="#5B9BD5" />}
+            >
+              {/* Day mini chart */}
+              <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 28, marginTop: 10 }}>
+                {dayNames.map((name, idx) => {
+                  const count = weeklyDayData[idx];
+                  const h = count === 0 ? 2 : Math.max(Math.round(count / maxWeeklyDay * 26), 4);
+                  const isPast = idx <= todayIdx;
+                  const isToday = idx === todayIdx;
+                  return (
+                    <div key={name} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                      <div style={{ width: "100%", height: h, background: isToday ? "#5B9BD5" : isPast ? "#8BBDE8" : "#F0EDE6", borderRadius: 2, opacity: isPast ? 1 : 0.3 }} />
+                      <span style={{ fontSize: 7, color: isToday ? "#1A1A1A" : "#CCC" }}>{name[0]}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </StatusCard>
+
+            {/* MONTHLY */}
+            <StatusCard
+              id="monthly"
+              title="This Month"
+              period={monthLabel}
+              stats={monthlyStats}
+              color="#6DB894"
+              detailContent={<DetailContent stats={monthlyStats} color="#6DB894" />}
+            >
+              {/* Day-of-month mini chart */}
+              <div style={{ display: "flex", gap: 1, alignItems: "flex-end", height: 28, marginTop: 10, flexWrap: "nowrap", overflow: "hidden" }}>
+                {monthlyDayData.map((count, i) => {
+                  const h = count === 0 ? 2 : Math.max(Math.round(count / maxMonthlyDay * 26), 4);
+                  const isPast = (i + 1) <= todayOfMonth;
+                  const isToday = (i + 1) === todayOfMonth;
+                  return <div key={i} style={{ flex: 1, height: h, background: isToday ? "#6DB894" : isPast ? "#8FD0AE" : "#F0EDE6", borderRadius: 1, opacity: isPast ? 1 : 0.3 }} />;
+                })}
+              </div>
+              <p style={{ margin: "4px 0 0", fontSize: 9, color: "#AAA" }}>Tasks per day this month</p>
+            </StatusCard>
           </div>
         );
       })()}
