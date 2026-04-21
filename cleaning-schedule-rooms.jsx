@@ -379,7 +379,7 @@ export default function CleaningSchedule() {
   }, []);
 
   useEffect(() => {
-    if (view !== "history") return;
+    if (view !== "history" && view !== "leaderboard") return;
     async function loadAll() {
       setArchiveLoading(true); setReportResults(null);
       try {
@@ -524,8 +524,8 @@ export default function CleaningSchedule() {
   );
 
   const tabs = isKidMode
-    ? [["tasks","Tasks"],["history","History"]]
-    : [["tasks","Tasks"],["history","History"],["edit","Edit"]];
+    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["history","History"]]
+    : [["tasks","Tasks"],["leaderboard","Leaderboard"],["history","History"],["edit","Edit"]];
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }} key={activeMember.id}>
@@ -553,6 +553,214 @@ export default function CleaningSchedule() {
           <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "10px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: view===v?"#F5F2EC":"#555", borderBottom: view===v?"2px solid #F5F2EC":"2px solid transparent", textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</button>
         ))}
       </div>
+
+      {/* ═══ LEADERBOARD VIEW ═══ */}
+      {view === "leaderboard" && (() => {
+        const kids = FAMILY.filter(f => f.isKid);
+
+        // Current week range (Sun-Sat)
+        const now = new Date();
+        const day = now.getDay();
+        const weekStart = new Date(now); weekStart.setDate(now.getDate() - day); weekStart.setHours(0,0,0,0);
+        const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23,59,59,999);
+        const weekLabel = weekStart.toLocaleDateString([],{month:"short",day:"numeric"}) + " - " + weekEnd.toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
+
+        // Count completions this week per kid
+        const weekCounts = {};
+        kids.forEach(k => { weekCounts[k.id] = 0; });
+        Object.values(completions).forEach(c => {
+          if (!c || !c.at || !c.by) return;
+          if (!kids.find(k => k.id === c.by)) return;
+          const ts = c.at;
+          if (ts >= weekStart.getTime() && ts <= weekEnd.getTime()) {
+            weekCounts[c.by] = (weekCounts[c.by] || 0) + 1;
+          }
+        });
+
+        // Also pull from archive data for this week
+        Object.values(allArchiveData).forEach(periodData => {
+          Object.values(periodData).forEach(c => {
+            if (!c || !c.at || !c.by) return;
+            if (!kids.find(k => k.id === c.by)) return;
+            if (c.at >= weekStart.getTime() && c.at <= weekEnd.getTime()) {
+              weekCounts[c.by] = (weekCounts[c.by] || 0) + 1;
+            }
+          });
+        });
+
+        // Sort kids by count
+        const sorted = [...kids].sort((a,b) => (weekCounts[b.id]||0) - (weekCounts[a.id]||0));
+        const maxCount = Math.max(...sorted.map(k => weekCounts[k.id]||0), 1);
+        const winner = sorted[0];
+        const isTie = sorted.length > 1 && weekCounts[sorted[0].id] === weekCounts[sorted[1].id] && weekCounts[sorted[0].id] > 0;
+        const hasActivity = sorted.some(k => weekCounts[k.id] > 0);
+
+        // Daily breakdown for chart (Sun-Sat)
+        const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+        const dailyData = {};
+        kids.forEach(k => { dailyData[k.id] = Array(7).fill(0); });
+
+        function addToDaily(completionsObj) {
+          Object.values(completionsObj).forEach(c => {
+            if (!c || !c.at || !c.by) return;
+            if (!kids.find(k => k.id === c.by)) return;
+            const ts = c.at;
+            if (ts >= weekStart.getTime() && ts <= weekEnd.getTime()) {
+              const d = new Date(ts).getDay();
+              dailyData[c.by][d] = (dailyData[c.by][d] || 0) + 1;
+            }
+          });
+        }
+        addToDaily(completions);
+        Object.values(allArchiveData).forEach(d => addToDaily(d));
+
+        const maxDaily = Math.max(...kids.flatMap(k => dailyData[k.id]), 1);
+        const todayIdx = now.getDay();
+
+        return (
+          <div style={{ paddingBottom: 60 }}>
+
+            {/* Week label */}
+            <div style={{ padding: "12px 16px 0", background: "#F5F2EC" }}>
+              <p style={{ margin: 0, fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.1em" }}>Week of {weekLabel}</p>
+            </div>
+
+            {/* Winner banner */}
+            {hasActivity && !isTie && (
+              <div style={{ margin: "12px 14px 0", padding: "16px", background: winner.color + "18", border: "2px solid " + winner.color + "44", borderRadius: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontSize: 32 }}>👑</span>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: 11, color: winner.color, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: "bold" }}>This Week's Leader</p>
+                    <p style={{ margin: "2px 0 0", fontSize: 22, fontWeight: "bold", color: winner.color }}>{winner.name}</p>
+                    <p style={{ margin: "2px 0 0", fontSize: 12, color: "#888" }}>{weekCounts[winner.id]} tasks completed</p>
+                  </div>
+                  <Avatar member={winner} size={52} fontSize={22} />
+                </div>
+              </div>
+            )}
+            {isTie && (
+              <div style={{ margin: "12px 14px 0", padding: "16px", background: "#FEFAEC", border: "2px solid #F0DC7A", borderRadius: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 28 }}>🤝</span>
+                  <div>
+                    <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color: "#7A6010" }}>It's a tie!</p>
+                    <p style={{ margin: "2px 0 0", fontSize: 12, color: "#888" }}>{sorted.filter(k => weekCounts[k.id] === weekCounts[sorted[0].id]).map(k=>k.name).join(" & ")} are neck and neck with {weekCounts[sorted[0].id]} tasks each</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {!hasActivity && (
+              <div style={{ margin: "12px 14px 0", padding: "16px", background: "#FAFAF8", border: "1px solid #E4E0D8", borderRadius: 14, textAlign: "center" }}>
+                <p style={{ margin: 0, fontSize: 28 }}>🏁</p>
+                <p style={{ margin: "8px 0 0", fontSize: 14, color: "#AAA" }}>No tasks completed yet this week</p>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#CCC" }}>Get going — the week just started!</p>
+              </div>
+            )}
+
+            {/* Bar chart */}
+            <div style={{ margin: "16px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px 14px 10px" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 11, fontWeight: "bold", color: "#1A1A1A" }}>Tasks Completed This Week</p>
+
+              {/* Horizontal bar chart */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {sorted.map((kid, rank) => {
+                  const count = weekCounts[kid.id] || 0;
+                  const pct = Math.round(count / maxCount * 100);
+                  const medals = ["🥇","🥈","🥉"];
+                  return (
+                    <div key={kid.id}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 14, width: 20 }}>{count > 0 ? (medals[rank] || "") : ""}</span>
+                        <Avatar member={kid} size={22} fontSize={10} />
+                        <span style={{ fontSize: 12, fontWeight: "bold", color: kid.color, width: 44 }}>{kid.name}</span>
+                        <div style={{ flex: 1, height: 22, background: "#F0EDE6", borderRadius: 6, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: (count === 0 ? 0 : Math.max(pct, 8)) + "%", background: kid.color, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 6, transition: "width 0.6s ease", boxSizing: "border-box" }}>
+                            {count > 0 && <span style={{ fontSize: 10, color: "#fff", fontWeight: "bold" }}>{count}</span>}
+                          </div>
+                        </div>
+                        {count === 0 && <span style={{ fontSize: 11, color: "#CCC" }}>0</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Daily activity chart */}
+            <div style={{ margin: "14px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px 14px 10px" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 11, fontWeight: "bold", color: "#1A1A1A" }}>Daily Activity</p>
+              <div style={{ display: "flex", gap: 6 }}>
+                {days.map((dayName, dayIdx) => {
+                  const isToday = dayIdx === todayIdx;
+                  const isFuture = dayIdx > todayIdx;
+                  return (
+                    <div key={dayName} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                      {/* Stacked bars */}
+                      <div style={{ width: "100%", height: 80, display: "flex", flexDirection: "column-reverse", justifyContent: "flex-start", gap: 1, opacity: isFuture ? 0.25 : 1 }}>
+                        {kids.map(kid => {
+                          const count = dailyData[kid.id][dayIdx] || 0;
+                          const h = count === 0 ? 0 : Math.max(Math.round(count / maxDaily * 72), 6);
+                          return (
+                            <div key={kid.id} title={kid.name + ": " + count} style={{ width: "100%", height: h, background: kid.color, borderRadius: 3, transition: "height 0.4s" }} />
+                          );
+                        })}
+                      </div>
+                      <span style={{ fontSize: 9, color: isToday ? "#1A1A1A" : "#AAA", fontWeight: isToday ? "bold" : "normal" }}>{dayName}</span>
+                      {isToday && <div style={{ width: 4, height: 4, borderRadius: "50%", background: "#1A1A1A" }} />}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Legend */}
+              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                {kids.map(kid => (
+                  <div key={kid.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: kid.color }} />
+                    <span style={{ fontSize: 10, color: kid.color, fontWeight: "bold" }}>{kid.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Individual cards */}
+            <div style={{ margin: "14px 14px 0", display: "flex", flexDirection: "column", gap: 10 }}>
+              {sorted.map((kid, rank) => {
+                const count = weekCounts[kid.id] || 0;
+                const medals = ["🥇","🥈","🥉"];
+                // Get their most recent completion
+                const recentCompletions = Object.values(completions)
+                  .filter(c => c && c.by === kid.id && c.at >= weekStart.getTime())
+                  .sort((a,b) => b.at - a.at);
+                const lastDone = recentCompletions[0];
+                return (
+                  <div key={kid.id} style={{ background: "#fff", borderRadius: 12, border: "1px solid " + kid.color + "44", overflow: "hidden" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: kid.color + "12" }}>
+                      <span style={{ fontSize: 18 }}>{count > 0 ? (medals[rank] || "") : "  "}</span>
+                      <Avatar member={kid} size={32} fontSize={14} />
+                      <div style={{ flex: 1 }}>
+                        <p style={{ margin: 0, fontSize: 14, fontWeight: "bold", color: kid.color }}>{kid.name}</p>
+                        <p style={{ margin: 0, fontSize: 11, color: "#888" }}>{count} task{count !== 1 ? "s" : ""} this week</p>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <p style={{ margin: 0, fontSize: 26, fontWeight: "bold", color: kid.color }}>{count}</p>
+                      </div>
+                    </div>
+                    {lastDone && (
+                      <div style={{ padding: "8px 14px", borderTop: "1px solid " + kid.color + "22" }}>
+                        <p style={{ margin: 0, fontSize: 11, color: "#AAA" }}>Last completed <span style={{ color: "#888" }}>{fmt(lastDone.at)}</span></p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer note */}
+            <p style={{ margin: "14px 14px 0", fontSize: 11, color: "#CCC", fontStyle: "italic", textAlign: "center" }}>Resets every Sunday</p>
+          </div>
+        );
+      })()}
 
       {/* ═══ HISTORY VIEW ═══ */}
       {view === "history" && (
