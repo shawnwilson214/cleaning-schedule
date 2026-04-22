@@ -259,226 +259,179 @@ const selectStyle = {
 const labelStyle = { fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 4px", display: "block" };
 
 // ─── STATUS VIEW COMPONENT ────────────────────────────────────────────────────
-function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels, frequencies, expandedCard, setExpandedCard, fmt, FAMILY, Avatar, RoomIcon, freqMeta }) {
+function StatusView({ completions, getTaskList, allRooms, levels, expandedCard, setExpandedCard, Avatar, RoomIcon, FAMILY }) {
   const now = new Date();
 
+  // Time boundaries
   const todayStart = new Date(now); todayStart.setHours(0,0,0,0);
   const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999);
   const weekDay = now.getDay();
   const weekStart = new Date(now); weekStart.setDate(now.getDate() - weekDay); weekStart.setHours(0,0,0,0);
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23,59,59,999);
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0, 23, 59, 59, 999);
-  const monthLabel = now.toLocaleDateString([],{month:"long",year:"numeric"});
-  const todayOfMonth = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
-  const currentHour = now.getHours();
-  const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const todayIdx = now.getDay();
+  const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59,999);
 
-  function scanAll(callback) {
-    Object.entries(completions).forEach(([k,v]) => callback(k,v));
-    Object.values(allArchiveData).forEach(d => Object.entries(d).forEach(([k,v]) => callback(k,v)));
+  // For each frequency, only look at completions within the natural reset window
+  // Daily = today, Weekly = this week, Monthly = this month, Quarterly/Annually = this year
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const yearEnd = new Date(now.getFullYear(), 11, 31, 23,59,59,999);
+
+  function windowForFreq(freq) {
+    if (freq === "Daily") return { from: todayStart.getTime(), to: todayEnd.getTime() };
+    if (freq === "Weekly") return { from: weekStart.getTime(), to: weekEnd.getTime() };
+    if (freq === "Monthly") return { from: monthStart.getTime(), to: monthEnd.getTime() };
+    return { from: yearStart.getTime(), to: yearEnd.getTime() };
   }
 
-  function getStats(fromTs, toTs, periodType) {
-    // Daily: only daily tasks. Weekly: daily + weekly. Monthly: daily + weekly + monthly.
-    const freqsForPeriod = {
-      daily: ["Daily"],
-      weekly: ["Daily", "Weekly"],
-      monthly: ["Daily", "Weekly", "Monthly"],
-    }[periodType] || ["Daily"];
+  // Build completion lookup: baseKey -> completion object
+  // baseKey = roomId-freq-taskIndex (strip member suffix if present)
+  const completionMap = {};
+  Object.entries(completions).forEach(([key, c]) => {
+    if (!c || !c.at || !c.freq) return;
+    const room = allRooms.find(r => key.startsWith(r.id + "-"));
+    if (!room) return;
+    const afterRoom = key.slice(room.id.length + 1);
+    const afterFreq = afterRoom.slice(c.freq.length + 1);
+    const taskIndex = parseInt(afterFreq.split("-")[0]);
+    if (isNaN(taskIndex)) return;
+    const win = windowForFreq(c.freq);
+    if (c.at < win.from || c.at > win.to) return;
+    const baseKey = room.id + "-" + c.freq + "-" + taskIndex;
+    if (!completionMap[baseKey] || c.at > completionMap[baseKey].at) {
+      completionMap[baseKey] = c;
+    }
+  });
 
-    let total = 0;
-    const seenDone = new Set();
-    const byRoom = {}, byPerson = {}, completedTasks = [];
+  // Compute stats for a given set of frequencies
+  function computeStats(freqList) {
+    let total = 0, done = 0;
+    const byLevel = {};
+    const byRoom = {};
 
-    levels.forEach(lv => lv.rooms.forEach(room => {
-      freqsForPeriod.forEach(freq => {
-        total += getTaskList(room.id, freq).length;
+    levels.forEach(lv => {
+      let lvTotal = 0, lvDone = 0;
+      lv.rooms.forEach(room => {
+        let rTotal = 0, rDone = 0;
+        freqList.forEach(freq => {
+          const tasks = getTaskList(room.id, freq);
+          tasks.forEach((t, i) => {
+            rTotal++;
+            const baseKey = room.id + "-" + freq + "-" + i;
+            if (completionMap[baseKey]) rDone++;
+          });
+        });
+        if (rTotal > 0) byRoom[room.id] = { name: room.name, icon: room.icon, total: rTotal, done: rDone, levelColor: lv.color };
+        lvTotal += rTotal;
+        lvDone += rDone;
+        total += rTotal;
+        done += rDone;
       });
-    }));
-
-    scanAll((key, c) => {
-      if (!c || !c.at || c.at < fromTs || c.at > toTs) return;
-      if (!freqsForPeriod.includes(c.freq)) return;
-      const room = allRooms.find(r => key.startsWith(r.id + "-"));
-      if (!room) return;
-      // Extract task index — key format is roomId-freq-index or roomId-freq-index-memberId
-      const afterRoom = key.slice(room.id.length + 1);
-      const afterFreq = afterRoom.slice(c.freq.length + 1);
-      const taskIndex = parseInt(afterFreq.split("-")[0]);
-      if (isNaN(taskIndex)) return;
-      const taskList = getTaskList(room.id, c.freq);
-      const taskObj = taskList[taskIndex];
-      if (!taskObj) return;
-      // Deduplicate: use base key (without member suffix) to avoid counting same task twice
-      const baseKey = room.id + "-" + c.freq + "-" + taskIndex;
-      if (seenDone.has(baseKey)) return;
-      seenDone.add(baseKey);
-      if (!byRoom[room.id]) byRoom[room.id] = { name: room.name, icon: room.icon, count: 0 };
-      byRoom[room.id].count++;
-      if (!byPerson[c.by]) byPerson[c.by] = { name: c.name, color: c.color, count: 0 };
-      byPerson[c.by].count++;
-      completedTasks.push({ task: taskObj.text, room: room.name, by: c.name, color: c.color, at: c.at, freq: c.freq });
+      if (lvTotal > 0) byLevel[lv.id] = { label: lv.label, icon: lv.icon, color: lv.color, total: lvTotal, done: lvDone };
     });
 
-    const done = Math.min(seenDone.size, total);
-    completedTasks.sort((a,b) => b.at - a.at);
-    return { done, total, byRoom, byPerson, completedTasks };
+    return { total, done: Math.min(done, total), byLevel, byRoom };
   }
 
-  const hourlyData = Array(24).fill(0);
-  const weeklyDayData = Array(7).fill(0);
-  const monthlyDayData = Array(daysInMonth).fill(0);
-  scanAll((key, c) => {
-    if (!c || !c.at) return;
-    if (c.at >= todayStart.getTime() && c.at <= todayEnd.getTime()) hourlyData[new Date(c.at).getHours()]++;
-    if (c.at >= weekStart.getTime() && c.at <= weekEnd.getTime()) weeklyDayData[new Date(c.at).getDay()]++;
-    if (c.at >= monthStart.getTime() && c.at <= monthEnd.getTime()) monthlyDayData[new Date(c.at).getDate()-1]++;
-  });
-  const maxHourly = Math.max(...hourlyData, 1);
-  const maxWeeklyDay = Math.max(...weeklyDayData, 1);
-  const maxMonthlyDay = Math.max(...monthlyDayData, 1);
-
-  const dailyStats = getStats(todayStart.getTime(), todayEnd.getTime(), "daily");
-  const weeklyStats = getStats(weekStart.getTime(), weekEnd.getTime(), "weekly");
-  const monthlyStats = getStats(monthStart.getTime(), monthEnd.getTime(), "monthly");
-
-  function DetailContent({ stats, color }) {
-    const topRooms = Object.values(stats.byRoom).sort((a,b) => b.count-a.count).slice(0,5);
-    const topPeople = Object.values(stats.byPerson).sort((a,b) => b.count-a.count);
-    const recent = stats.completedTasks.slice(0,8);
-    return (
-      <div>
-        {topPeople.length > 0 && (<>
-          <p style={{ margin:"0 0 8px", fontSize:10, color:"#AAA", textTransform:"uppercase", letterSpacing:"0.08em" }}>By Person</p>
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
-            {topPeople.map(p => {
-              const member = FAMILY.find(f => f.name === p.name);
-              return (
-                <div key={p.name} style={{ display:"flex", alignItems:"center", gap:6, background:"#fff", padding:"6px 10px", borderRadius:10, border:"1px solid "+(p.color||color)+"33" }}>
-                  {member && <Avatar member={member} size={20} fontSize={9} />}
-                  <span style={{ fontSize:12, fontWeight:"bold", color:p.color||color }}>{p.name}</span>
-                  <span style={{ fontSize:12, color:"#AAA" }}>{p.count}</span>
-                </div>
-              );
-            })}
-          </div>
-        </>)}
-        {topRooms.length > 0 && (<>
-          <p style={{ margin:"0 0 8px", fontSize:10, color:"#AAA", textTransform:"uppercase", letterSpacing:"0.08em" }}>Top Rooms</p>
-          <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:14 }}>
-            {topRooms.map(r => (
-              <div key={r.name} style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <RoomIcon icon={r.icon} size={14} />
-                <span style={{ fontSize:12, color:"#555", flex:1 }}>{r.name}</span>
-                <div style={{ width:80, height:8, background:"#F0EDE6", borderRadius:4, overflow:"hidden" }}>
-                  <div style={{ height:"100%", width:Math.round(r.count/topRooms[0].count*100)+"%", background:color, borderRadius:4 }} />
-                </div>
-                <span style={{ fontSize:11, color:"#888", minWidth:16, textAlign:"right" }}>{r.count}</span>
-              </div>
-            ))}
-          </div>
-        </>)}
-        {recent.length > 0 && (<>
-          <p style={{ margin:"0 0 8px", fontSize:10, color:"#AAA", textTransform:"uppercase", letterSpacing:"0.08em" }}>Recent Completions</p>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {recent.map((t,i) => (
-              <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", background:"#fff", borderRadius:8, border:"1px solid #F0EDE6" }}>
-                <div style={{ width:14, height:14, borderRadius:"50%", background:t.color, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                  <svg width="7" height="5" viewBox="0 0 7 5" fill="none"><path d="M1 2.5L2.5 4L6 1" stroke="#fff" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </div>
-                <span style={{ flex:1, fontSize:11, color:"#333" }}>{t.task}</span>
-                <span style={{ fontSize:10, color:t.color, fontWeight:"bold", flexShrink:0 }}>{t.by}</span>
-                <span style={{ fontSize:9, color:"#CCC", flexShrink:0 }}>{fmt(t.at)}</span>
-              </div>
-            ))}
-          </div>
-        </>)}
-        {stats.done === 0 && <p style={{ margin:0, fontSize:12, color:"#CCC", fontStyle:"italic", textAlign:"center", padding:"8px 0" }}>No completions in this period yet.</p>}
-      </div>
-    );
-  }
-
-  function StatusCard({ id, title, period, stats, color, children }) {
-    const pct = stats.total ? Math.min(100, Math.round(stats.done/stats.total*100)) : 0;
-    const isExpanded = expandedCard === id;
-    return (
-      <div style={{ marginBottom:12, borderRadius:14, overflow:"hidden", border:"1px solid "+color+"44", background:"#fff" }}>
-        <div onClick={() => setExpandedCard(isExpanded ? null : id)} style={{ padding:"14px 16px", cursor:"pointer", background:isExpanded?color+"10":"#fff" }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-            <div>
-              <p style={{ margin:0, fontSize:13, fontWeight:"bold", color:"#1A1A1A" }}>{title}</p>
-              <p style={{ margin:"2px 0 0", fontSize:10, color:"#AAA" }}>{period}</p>
-            </div>
-            <div style={{ textAlign:"right" }}>
-              <p style={{ margin:0, fontSize:26, fontWeight:"bold", color }}>{stats.done}</p>
-              <p style={{ margin:0, fontSize:10, color:"#AAA" }}>of {stats.total} done</p>
-            </div>
-          </div>
-          <div style={{ height:6, background:"#F0EDE6", borderRadius:4, overflow:"hidden", marginBottom:8 }}>
-            <div style={{ height:"100%", width:pct+"%", background:color, borderRadius:4, transition:"width 0.5s" }} />
-          </div>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-            <span style={{ fontSize:11, color }}>{pct}% complete</span>
-            <span style={{ fontSize:11, color:isExpanded?color:"#CCC" }}>{isExpanded?"▲ Less":"▼ Details"}</span>
-          </div>
-          {children}
-        </div>
-        {isExpanded && (
-          <div style={{ borderTop:"1px solid "+color+"33", padding:"14px 16px", background:color+"06" }}>
-            <DetailContent stats={stats} color={color} />
-          </div>
-        )}
-      </div>
-    );
-  }
+  const freqCards = [
+    { id: "daily",     label: "Daily",     freq: ["Daily"],                        color: "#E8C547", period: now.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"}) },
+    { id: "weekly",    label: "Weekly",    freq: ["Weekly"],                       color: "#5B9BD5", period: weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric"}) },
+    { id: "monthly",   label: "Monthly",   freq: ["Monthly"],                      color: "#6DB894", period: now.toLocaleDateString([],{month:"long",year:"numeric"}) },
+    { id: "quarterly", label: "Quarterly", freq: ["Quarterly"],                    color: "#A67DC4", period: "Q"+Math.ceil((now.getMonth()+1)/3)+" "+now.getFullYear() },
+    { id: "annually",  label: "Annual",    freq: ["Annually"],                     color: "#D4445A", period: now.getFullYear().toString() },
+  ];
 
   return (
-    <div style={{ padding:"14px 14px 60px" }}>
-      <p style={{ margin:"0 0 14px", fontSize:10, color:"#AAA", fontStyle:"italic" }}>Tap any card to see details</p>
+    <div style={{ padding: "14px 14px 60px", background: "#F5F2EC", minHeight: "100vh" }}>
+      <p style={{ margin: "0 0 14px", fontSize: 10, color: "#AAA", fontStyle: "italic" }}>Tap any card to see level and room breakdown</p>
 
-      <StatusCard id="daily" title="Today's Progress" period={now.toLocaleDateString([],{weekday:"long",month:"long",day:"numeric"})} stats={dailyStats} color="#E8C547">
-        <div style={{ display:"flex", gap:1, alignItems:"flex-end", height:28 }}>
-          {hourlyData.map((count, hr) => {
-            const h = count===0?2:Math.max(Math.round(count/maxHourly*26),4);
-            const isPast = hr <= currentHour;
-            return <div key={hr} style={{ flex:1, height:h, background:isPast?"#E8C547":"#F0EDE6", borderRadius:2, opacity:hr===currentHour?1:isPast?0.7:0.3 }} />;
-          })}
-        </div>
-        <p style={{ margin:"4px 0 0", fontSize:9, color:"#AAA" }}>Tasks by hour today</p>
-      </StatusCard>
+      {freqCards.map(card => {
+        const stats = computeStats(card.freq);
+        const pct = stats.total ? Math.min(100, Math.round(stats.done / stats.total * 100)) : 0;
+        const isExpanded = expandedCard === card.id;
 
-      <StatusCard id="weekly" title="This Week" period={weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric"})} stats={weeklyStats} color="#5B9BD5">
-        <div style={{ display:"flex", gap:4, alignItems:"flex-end", height:28 }}>
-          {dayNames.map((name, idx) => {
-            const count = weeklyDayData[idx];
-            const h = count===0?2:Math.max(Math.round(count/maxWeeklyDay*26),4);
-            const isToday = idx===todayIdx, isPast = idx<=todayIdx;
-            return (
-              <div key={name} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
-                <div style={{ width:"100%", height:h, background:isToday?"#5B9BD5":isPast?"#8BBDE8":"#F0EDE6", borderRadius:2, opacity:isPast?1:0.3 }} />
-                <span style={{ fontSize:7, color:isToday?"#1A1A1A":"#CCC" }}>{name[0]}</span>
+        return (
+          <div key={card.id} style={{ marginBottom: 12, borderRadius: 14, overflow: "hidden", border: "1px solid " + card.color + "55", background: "#fff" }}>
+            {/* Card header — always visible */}
+            <div onClick={() => setExpandedCard(isExpanded ? null : card.id)} style={{ padding: "14px 16px", cursor: "pointer", background: isExpanded ? card.color + "12" : "#fff" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div>
+                  <p style={{ margin: 0, fontSize: 14, fontWeight: "bold", color: "#1A1A1A" }}>{card.label}</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{card.period}</p>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <p style={{ margin: 0, fontSize: 28, fontWeight: "bold", color: card.color, lineHeight: 1 }}>{pct}%</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{stats.done} of {stats.total} tasks</p>
+                </div>
               </div>
-            );
-          })}
-        </div>
-      </StatusCard>
+              {/* Progress bar */}
+              <div style={{ height: 8, background: "#F0EDE6", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: pct + "%", background: card.color, borderRadius: 4, transition: "width 0.4s" }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+                <span style={{ fontSize: 10, color: isExpanded ? card.color : "#CCC" }}>{isExpanded ? "▲ Less" : "▼ Details"}</span>
+              </div>
+            </div>
 
-      <StatusCard id="monthly" title="This Month" period={monthLabel} stats={monthlyStats} color="#6DB894">
-        <div style={{ display:"flex", gap:1, alignItems:"flex-end", height:28, overflow:"hidden" }}>
-          {monthlyDayData.map((count, i) => {
-            const h = count===0?2:Math.max(Math.round(count/maxMonthlyDay*26),4);
-            const isToday=(i+1)===todayOfMonth, isPast=(i+1)<=todayOfMonth;
-            return <div key={i} style={{ flex:1, height:h, background:isToday?"#6DB894":isPast?"#8FD0AE":"#F0EDE6", borderRadius:1, opacity:isPast?1:0.3 }} />;
-          })}
-        </div>
-        <p style={{ margin:"4px 0 0", fontSize:9, color:"#AAA" }}>Tasks per day this month</p>
-      </StatusCard>
+            {/* Expanded detail */}
+            {isExpanded && (
+              <div style={{ borderTop: "1px solid " + card.color + "33", padding: "14px 16px", background: card.color + "06" }}>
+
+                {/* By Level */}
+                <p style={{ margin: "0 0 10px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>By Floor</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+                  {Object.values(stats.byLevel).map(lv => {
+                    const lvPct = lv.total ? Math.min(100, Math.round(lv.done / lv.total * 100)) : 0;
+                    return (
+                      <div key={lv.label}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 13 }}>{lv.icon}</span>
+                            <span style={{ fontSize: 12, fontWeight: "bold", color: lv.color }}>{lv.label}</span>
+                          </div>
+                          <span style={{ fontSize: 11, color: "#888" }}>{lv.done}/{lv.total} &nbsp;<span style={{ color: lv.color, fontWeight: "bold" }}>{lvPct}%</span></span>
+                        </div>
+                        <div style={{ height: 6, background: "#F0EDE6", borderRadius: 3, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: lvPct + "%", background: lv.color, borderRadius: 3, transition: "width 0.4s" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* By Room */}
+                <p style={{ margin: "0 0 10px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>By Room</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {Object.values(stats.byRoom)
+                    .filter(r => r.total > 0)
+                    .sort((a,b) => (b.done/b.total) - (a.done/a.total))
+                    .map(room => {
+                      const rPct = Math.min(100, Math.round(room.done / room.total * 100));
+                      const roomData = allRooms.find(r => r.name === room.name);
+                      return (
+                        <div key={room.name}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {roomData && <RoomIcon icon={roomData.icon} size={13} />}
+                              <span style={{ fontSize: 11, color: "#555" }}>{room.name}</span>
+                            </div>
+                            <span style={{ fontSize: 10, color: "#888" }}>{room.done}/{room.total} &nbsp;<span style={{ color: rPct === 100 ? "#6DB894" : room.levelColor, fontWeight: "bold" }}>{rPct}%</span></span>
+                          </div>
+                          <div style={{ height: 4, background: "#F0EDE6", borderRadius: 3, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: rPct + "%", background: rPct === 100 ? "#6DB894" : room.levelColor, borderRadius: 3, transition: "width 0.4s" }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
+
 
 export default function CleaningSchedule() {
   const [activeFreq, setActiveFreq] = useState("Daily");
@@ -496,6 +449,8 @@ export default function CleaningSchedule() {
   const [newTaskText, setNewTaskText] = useState("");
   const [newTaskFreq, setNewTaskFreq] = useState("Daily");
   const [newTaskAssignees, setNewTaskAssignees] = useState([]);
+  const [newTaskTime, setNewTaskTime] = useState("");
+  const [newTaskEditFreq, setNewTaskEditFreq] = useState("Daily");
   const [showAddTask, setShowAddTask] = useState(false);
   const [allArchiveData, setAllArchiveData] = useState({});
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -529,7 +484,7 @@ export default function CleaningSchedule() {
   function getTaskList(roomId, freq) {
     if (customTasks[roomId]?.[freq] !== undefined) return customTasks[roomId][freq];
     const room = allRooms.find(r => r.id === roomId);
-    return (room?.tasks[freq] || []).map(text => ({ text, assignees: [] }));
+    return (room?.tasks[freq] || []).map(text => ({ text, assignees: [], time: "" }));
   }
 
   function getVisibleTasks(roomId, freq) {
@@ -541,7 +496,7 @@ export default function CleaningSchedule() {
   function ensureSnapshot(roomId, freq, prev) {
     if (prev[roomId]?.[freq] !== undefined) return prev;
     const room = allRooms.find(r => r.id === roomId);
-    const base = (room?.tasks[freq] || []).map(text => ({ text, assignees: [] }));
+    const base = (room?.tasks[freq] || []).map(text => ({ text, assignees: [], time: "" }));
     return { ...prev, [roomId]: { ...(prev[roomId] || {}), [freq]: base } };
   }
 
@@ -751,6 +706,7 @@ export default function CleaningSchedule() {
     const completion = getCompletion(key);
     const done = !!completion;
     const member = done ? FAMILY.find(f => f.id === completion.by) : null;
+    const color = (fmr || freqMeta[freq]).text;
     return (
       <div onClick={() => toggleTask(key, freq)} style={{ padding: "10px 14px", borderBottom: isLast ? "none" : "1px solid "+(fmr||freqMeta[freq]).border, cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -758,12 +714,11 @@ export default function CleaningSchedule() {
             {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: 13, color: done?"#AAA":(fmr||freqMeta[freq]).text, textDecoration: done?"line-through":"none" }}>{task.text}</span>
-            {!isKidMode && task.assignees?.length > 0 && (
-              <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
-                {task.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null; })}
-              </div>
-            )}
+            <span style={{ fontSize: 13, color: done?"#AAA":color, textDecoration: done?"line-through":"none" }}>{task.text}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
+              {!isKidMode && task.assignees?.length > 0 && task.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={14} fontSize={7} /> : null; })}
+              {task.time && <span style={{ fontSize: 9, color: done?"#CCC":"#AAA", background: "#F5F2EC", padding: "1px 6px", borderRadius: 6 }}>~{task.time}</span>}
+            </div>
           </div>
           {done && member && (
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
@@ -786,8 +741,8 @@ export default function CleaningSchedule() {
   );
 
   const tabs = isKidMode
-    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["status","Status"],["history","History"]]
-    : [["tasks","Tasks"],["leaderboard","Leaderboard"],["status","Status"],["history","History"],["edit","Edit"]];
+    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["history","History"]]
+    : [["tasks","Tasks"],["status","Status"],["leaderboard","Leaderboard"],["history","History"],["edit","Edit"]];
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }} key={activeMember.id}>
@@ -1012,18 +967,14 @@ export default function CleaningSchedule() {
       {/* ═══ STATUS VIEW ═══ */}
       {view === "status" && <StatusView
         completions={completions}
-        allArchiveData={allArchiveData}
         getTaskList={getTaskList}
         allRooms={allRooms}
         levels={levels}
-        frequencies={frequencies}
         expandedCard={expandedCard}
         setExpandedCard={setExpandedCard}
-        fmt={fmt}
-        FAMILY={FAMILY}
         Avatar={Avatar}
         RoomIcon={RoomIcon}
-        freqMeta={freqMeta}
+        FAMILY={FAMILY}
       />}
 
       {/* ═══ HISTORY VIEW ═══ */}
@@ -1169,19 +1120,18 @@ export default function CleaningSchedule() {
           <div style={{ padding: "12px 0 48px" }}>
             {levels.map(lv => {
               const lvRooms = lv.rooms.filter(r => getVisibleTasks(r.id, activeFreq).length > 0);
-              if (isKidMode && lvRooms.length === 0) return null;
+              if (lvRooms.length === 0) return null;
               return (
                 <div key={lv.id} style={{ marginBottom: 6 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 20px", background:"#ECEAE3", borderLeft:"4px solid "+lv.color }}>
                     <span style={{ fontSize:15 }}>{lv.icon}</span>
                     <span style={{ fontSize:11, fontWeight:"bold", color:lv.color, textTransform:"uppercase" }}>{lv.label}</span>
-                    {!isKidMode && lvRooms.length===0 && <span style={{ fontSize:10, color:"#BBB", fontStyle:"italic" }}>no {activeFreq.toLowerCase()} tasks</span>}
                   </div>
                   <div style={{ padding: "6px 12px 2px" }}>
                     {lv.rooms.map(room => {
                       const visible = getVisibleTasks(room.id, activeFreq);
                       const full = getTaskList(room.id, activeFreq);
-                      if (isKidMode && visible.length === 0) return null;
+                      if (visible.length === 0) return null;
                       const colKey = room.id+"-"+activeFreq, isOpen = !collapsed[colKey];
                       const doneCount = visible.filter(t => { const fi=full.findIndex(ft=>ft.text===t.text); return fi!==-1&&isDone(room.id+"-"+activeFreq+"-"+fi); }).length;
                       const roomPct = visible.length ? Math.round(doneCount/visible.length*100) : 0;
