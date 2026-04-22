@@ -155,7 +155,7 @@ const levels = [
       Quarterly: ["Wipe baseboards & light switch","Dust ceiling fan","Dust blinds","Declutter outgrown toys & clothes"],
       Annually: ["Deep clean carpets or rugs","Wipe walls"] }},
     { id: "kids-bathroom", name: "Kids Bathroom", icon: "\uD83D\uDEC1", tasks: {
-      Daily: ["Wipe sink after use","Tidy bathroom - pick up laundry from floor"],
+      Daily: ["Wipe sink after use (Zach)","Wipe sink after use (Kyle)","Tidy bathroom - pick up laundry from floor"],
       Weekly: ["Scrub toilet (inside & outside)","Clean sink & countertop","Scrub tub or shower","Mop floor","Wipe mirror","Empty trash","Replace hand towel"],
       Monthly: ["Wash bath mat","Organize kids toiletries & products"],
       Quarterly: ["Wipe baseboards & light switches","Wipe cabinet fronts","Wash shower curtain & liner","Declutter expired or unused products"],
@@ -281,31 +281,49 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
     Object.values(allArchiveData).forEach(d => Object.entries(d).forEach(([k,v]) => callback(k,v)));
   }
 
-  function getStats(fromTs, toTs, freqFilter) {
-    let done = 0, total = 0;
+  function getStats(fromTs, toTs, periodType) {
+    // Daily: only daily tasks. Weekly: daily + weekly. Monthly: daily + weekly + monthly.
+    const freqsForPeriod = {
+      daily: ["Daily"],
+      weekly: ["Daily", "Weekly"],
+      monthly: ["Daily", "Weekly", "Monthly"],
+    }[periodType] || ["Daily"];
+
+    let total = 0;
+    const seenDone = new Set();
     const byRoom = {}, byPerson = {}, completedTasks = [];
+
     levels.forEach(lv => lv.rooms.forEach(room => {
-      (freqFilter ? [freqFilter] : frequencies).forEach(freq => {
+      freqsForPeriod.forEach(freq => {
         total += getTaskList(room.id, freq).length;
       });
     }));
+
     scanAll((key, c) => {
       if (!c || !c.at || c.at < fromTs || c.at > toTs) return;
-      if (freqFilter && c.freq !== freqFilter) return;
+      if (!freqsForPeriod.includes(c.freq)) return;
       const room = allRooms.find(r => key.startsWith(r.id + "-"));
       if (!room) return;
-      const parts = key.replace(room.id + "-" + c.freq + "-", "");
-      const taskIndex = parseInt(parts.split("-")[0]);
+      // Extract task index — key format is roomId-freq-index or roomId-freq-index-memberId
+      const afterRoom = key.slice(room.id.length + 1);
+      const afterFreq = afterRoom.slice(c.freq.length + 1);
+      const taskIndex = parseInt(afterFreq.split("-")[0]);
+      if (isNaN(taskIndex)) return;
       const taskList = getTaskList(room.id, c.freq);
       const taskObj = taskList[taskIndex];
       if (!taskObj) return;
-      done++;
+      // Deduplicate: use base key (without member suffix) to avoid counting same task twice
+      const baseKey = room.id + "-" + c.freq + "-" + taskIndex;
+      if (seenDone.has(baseKey)) return;
+      seenDone.add(baseKey);
       if (!byRoom[room.id]) byRoom[room.id] = { name: room.name, icon: room.icon, count: 0 };
       byRoom[room.id].count++;
       if (!byPerson[c.by]) byPerson[c.by] = { name: c.name, color: c.color, count: 0 };
       byPerson[c.by].count++;
       completedTasks.push({ task: taskObj.text, room: room.name, by: c.name, color: c.color, at: c.at, freq: c.freq });
     });
+
+    const done = Math.min(seenDone.size, total);
     completedTasks.sort((a,b) => b.at - a.at);
     return { done, total, byRoom, byPerson, completedTasks };
   }
@@ -323,9 +341,9 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
   const maxWeeklyDay = Math.max(...weeklyDayData, 1);
   const maxMonthlyDay = Math.max(...monthlyDayData, 1);
 
-  const dailyStats = getStats(todayStart.getTime(), todayEnd.getTime(), "Daily");
-  const weeklyStats = getStats(weekStart.getTime(), weekEnd.getTime(), "Weekly");
-  const monthlyStats = getStats(monthStart.getTime(), monthEnd.getTime(), "Monthly");
+  const dailyStats = getStats(todayStart.getTime(), todayEnd.getTime(), "daily");
+  const weeklyStats = getStats(weekStart.getTime(), weekEnd.getTime(), "weekly");
+  const monthlyStats = getStats(monthStart.getTime(), monthEnd.getTime(), "monthly");
 
   function DetailContent({ stats, color }) {
     const topRooms = Object.values(stats.byRoom).sort((a,b) => b.count-a.count).slice(0,5);
@@ -384,7 +402,7 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
   }
 
   function StatusCard({ id, title, period, stats, color, children }) {
-    const pct = stats.total ? Math.round(stats.done/stats.total*100) : 0;
+    const pct = stats.total ? Math.min(100, Math.round(stats.done/stats.total*100)) : 0;
     const isExpanded = expandedCard === id;
     return (
       <div style={{ marginBottom:12, borderRadius:14, overflow:"hidden", border:"1px solid "+color+"44", background:"#fff" }}>
@@ -499,7 +517,12 @@ export default function CleaningSchedule() {
   // ── Kid visibility: own room always visible; other rooms only if explicitly assigned ──
   function isVisibleToKid(task, roomId, member) {
     if (!member.isKid) return true;
+    // Tasks with "(Name)" suffix are auto-assigned to that kid only
+    const nameTag = task.text.match(/\((\w+)\)$/);
+    if (nameTag) return nameTag[1].toLowerCase() === member.name.toLowerCase();
+    // Always show all tasks in their own bedroom
     if (roomId === member.ownRoomId) return true;
+    // Show tasks elsewhere only if explicitly assigned
     return (task.assignees || []).includes(member.id);
   }
 
@@ -617,18 +640,32 @@ export default function CleaningSchedule() {
   // Get completion for a task key, respecting per-person keys for kids
   function getCompletion(key) {
     if (isKidMode) {
+      // Kids only see their own completion
       return completions[key + "-" + activeMember.id] || null;
     }
-    // Adults see all completions for a key — return most recent
-    const personal = completions[key + "-" + activeMember.id];
-    const shared = completions[key];
-    if (personal && shared) return personal.at > shared.at ? personal : shared;
-    return personal || shared || null;
+    // Adults: check the shared key plus all kid-specific keys, return most recent
+    const candidates = [completions[key]];
+    FAMILY.filter(f => f.isKid).forEach(k => {
+      candidates.push(completions[key + "-" + k.id]);
+    });
+    const valid = candidates.filter(Boolean);
+    if (valid.length === 0) return null;
+    return valid.sort((a, b) => b.at - a.at)[0];
   }
 
   // Check if a task is done for the current viewer
   function isDone(key) {
     return !!getCompletion(key);
+  }
+
+  // For adults, get ALL completions for a key (multiple kids may have completed it)
+  function getAllCompletions(key) {
+    const result = [];
+    if (completions[key]) result.push(completions[key]);
+    FAMILY.filter(f => f.isKid).forEach(k => {
+      if (completions[key + "-" + k.id]) result.push(completions[key + "-" + k.id]);
+    });
+    return result.sort((a, b) => b.at - a.at);
   }
 
   const toggleRoom = (key) => setCollapsed(p => ({ ...p, [key]: !p[key] }));
