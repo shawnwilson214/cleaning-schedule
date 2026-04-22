@@ -1214,79 +1214,142 @@ export default function CleaningSchedule() {
       </>)}
 
       {/* ═══ EDIT VIEW (adults only) ═══ */}
-      {view === "edit" && !isKidMode && (
-        <div style={{ paddingBottom: 60 }}>
-          <div style={{ display:"flex", background:"#ECEAE3", borderBottom:"1px solid #DDD8CE" }}>
-            {levels.map(lv => (
-              <button key={lv.id} onClick={() => { setEditLevel(lv); setEditRoom(lv.rooms[0]); setShowAddTask(false); setEditingTask(null); }} style={{ flex:1, background:editLevel.id===lv.id?lv.color+"18":"none", border:"none", padding:"12px 4px 10px", cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:editLevel.id===lv.id?"bold":"normal", color:editLevel.id===lv.id?lv.color:"#999", borderBottom:editLevel.id===lv.id?"3px solid "+lv.color:"3px solid transparent", textTransform:"uppercase" }}>
-                <div style={{ fontSize:16, marginBottom:3 }}>{lv.icon}</div>{lv.label}
-              </button>
-            ))}
-          </div>
-          <div style={{ padding:"10px 12px 0", display:"flex", gap:6, overflowX:"auto" }}>
-            {editLevel.rooms.map(room => (
-              <button key={room.id} onClick={() => { setEditRoom(room); setShowAddTask(false); setEditingTask(null); }} style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 12px", borderRadius:16, border:"1px solid "+(editRoom.id===room.id?editLevel.color:"#DDD8CE"), background:editRoom.id===room.id?editLevel.color:"#fff", color:editRoom.id===room.id?"#fff":"#555", cursor:"pointer", fontFamily:"inherit", fontSize:11, whiteSpace:"nowrap", flexShrink:0 }}>
-                <RoomIcon icon={room.icon} size={13} /><span>{room.name}</span>
-              </button>
-            ))}
-          </div>
-          <div style={{ padding:"12px 12px 0" }}>
-            {frequencies.map(freq => {
-              const tasks = getTaskList(editRoom.id, freq), fmr = freqMeta[freq];
-              return (
-                <div key={freq} style={{ marginBottom:14 }}>
-                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
-                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                      <div style={{ width:8, height:8, borderRadius:"50%", background:fmr.dot }} />
-                      <span style={{ fontSize:11, fontWeight:"bold", color:fmr.text, textTransform:"uppercase" }}>{freq}</span>
-                      <span style={{ fontSize:10, color:"#BBB" }}>({tasks.length})</span>
+      {view === "edit" && !isKidMode && (() => {
+        const inputSt = { width:"100%", fontSize:13, padding:"6px 8px", border:"1px solid #DDD8CE", borderRadius:6, fontFamily:"inherit", boxSizing:"border-box", background:"#fff" };
+        const lbSt = { fontSize:10, color:"#888", textTransform:"uppercase", letterSpacing:"0.06em", display:"block", marginBottom:3 };
+
+        function EditForm({ onSave, onCancel, fmr }) {
+          return (
+            <div style={{ padding:"12px", background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10, marginBottom:8 }}>
+              <label style={lbSt}>Task Name</label>
+              <input autoFocus value={newTaskText} onChange={e=>setNewTaskText(e.target.value)} placeholder="Describe the task..." style={{ ...inputSt, marginBottom:10 }} />
+
+              <label style={lbSt}>Frequency</label>
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:10 }}>
+                {frequencies.map(f => {
+                  const fm2 = freqMeta[f], sel = newTaskEditFreq === f;
+                  return <button key={f} onClick={() => setNewTaskEditFreq(f)} style={{ padding:"4px 10px", borderRadius:10, border:"1px solid "+(sel?fm2.dot:"#DDD"), background:sel?fm2.bg:"#fff", color:sel?fm2.text:"#888", cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:sel?"bold":"normal" }}>{f}</button>;
+                })}
+              </div>
+
+              <label style={lbSt}>Assigned To</label>
+              <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:10 }}>
+                {FAMILY.map(m => (
+                  <button key={m.id} onClick={() => setNewTaskAssignees(prev=>prev.includes(m.id)?prev.filter(x=>x!==m.id):[...prev,m.id])} style={{ display:"flex", alignItems:"center", gap:4, padding:"4px 10px", borderRadius:12, border:"1px solid "+(newTaskAssignees.includes(m.id)?m.color:"#DDD"), background:newTaskAssignees.includes(m.id)?m.color+"22":"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>
+                    <Avatar member={m} size={16} fontSize={8} />
+                    <span style={{ color:newTaskAssignees.includes(m.id)?m.color:"#777" }}>{m.name}</span>
+                  </button>
+                ))}
+              </div>
+
+              <label style={lbSt}>Estimated Time</label>
+              <input value={newTaskTime} onChange={e=>setNewTaskTime(e.target.value)} placeholder="e.g. 5 min, 15 min, 1 hr" style={{ ...inputSt, marginBottom:12 }} />
+
+              <div style={{ display:"flex", gap:6 }}>
+                <button onClick={onSave} style={{ flex:1, padding:"8px", background:"#1A1A1A", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:"bold" }}>Save</button>
+                <button onClick={onCancel} style={{ padding:"8px 14px", background:"#fff", border:"1px solid #DDD", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:12, color:"#888" }}>Cancel</button>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div style={{ paddingBottom: 60 }}>
+            <div style={{ display:"flex", background:"#ECEAE3", borderBottom:"1px solid #DDD8CE" }}>
+              {levels.map(lv => (
+                <button key={lv.id} onClick={() => { setEditLevel(lv); setEditRoom(lv.rooms[0]); setShowAddTask(false); setEditingTask(null); }} style={{ flex:1, background:editLevel.id===lv.id?lv.color+"18":"none", border:"none", padding:"12px 4px 10px", cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:editLevel.id===lv.id?"bold":"normal", color:editLevel.id===lv.id?lv.color:"#999", borderBottom:editLevel.id===lv.id?"3px solid "+lv.color:"3px solid transparent", textTransform:"uppercase" }}>
+                  <div style={{ fontSize:16, marginBottom:3 }}>{lv.icon}</div>{lv.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ padding:"10px 12px 0", display:"flex", gap:6, overflowX:"auto" }}>
+              {editLevel.rooms.map(room => (
+                <button key={room.id} onClick={() => { setEditRoom(room); setShowAddTask(false); setEditingTask(null); }} style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 12px", borderRadius:16, border:"1px solid "+(editRoom.id===room.id?editLevel.color:"#DDD8CE"), background:editRoom.id===room.id?editLevel.color:"#fff", color:editRoom.id===room.id?"#fff":"#555", cursor:"pointer", fontFamily:"inherit", fontSize:11, whiteSpace:"nowrap", flexShrink:0 }}>
+                  <RoomIcon icon={room.icon} size={13} /><span>{room.name}</span>
+                </button>
+              ))}
+            </div>
+
+            <div style={{ padding:"12px 12px 0" }}>
+              {frequencies.map(freq => {
+                const tasks = getTaskList(editRoom.id, freq);
+                const fmr = freqMeta[freq];
+                return (
+                  <div key={freq} style={{ marginBottom:16 }}>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        <div style={{ width:8, height:8, borderRadius:"50%", background:fmr.dot }} />
+                        <span style={{ fontSize:11, fontWeight:"bold", color:fmr.text, textTransform:"uppercase" }}>{freq}</span>
+                        <span style={{ fontSize:10, color:"#BBB" }}>({tasks.length})</span>
+                      </div>
+                      <button onClick={() => { setShowAddTask(true); setNewTaskFreq(freq); setNewTaskEditFreq(freq); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); setEditingTask(null); }} style={{ fontSize:11, color:fmr.text, background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit" }}>+ Add</button>
                     </div>
-                    <button onClick={() => { setShowAddTask(true); setNewTaskFreq(freq); setNewTaskText(""); setNewTaskAssignees([]); setEditingTask(null); }} style={{ fontSize:11, color:fmr.text, background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit" }}>+ Add</button>
+
+                    {showAddTask && newTaskFreq===freq && editingTask===null && (
+                      <EditForm
+                        fmr={fmr}
+                        onSave={() => {
+                          if (!newTaskText.trim()) return;
+                          const tgt = newTaskEditFreq;
+                          const updated = (prev => {
+                            const snap = ensureSnapshot(editRoom.id, tgt, prev);
+                            return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [tgt]: [...snap[editRoom.id][tgt], { text: newTaskText.trim(), assignees: newTaskAssignees, time: newTaskTime.trim() }] } };
+                          })(customTasks);
+                          setCustomTasks(updated); saveCustomTasks(updated);
+                          setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
+                        }}
+                        onCancel={() => { setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
+                      />
+                    )}
+
+                    {tasks.length===0 && !(showAddTask && newTaskFreq===freq) && (
+                      <p style={{ fontSize:12, color:"#CCC", fontStyle:"italic", margin:"0 0 4px" }}>No {freq.toLowerCase()} tasks</p>
+                    )}
+
+                    {tasks.map((task, i) => (
+                      <div key={i} style={{ marginBottom:5 }}>
+                        {editingTask?.roomId===editRoom.id && editingTask?.freq===freq && editingTask?.index===i ? (
+                          <EditForm
+                            fmr={fmr}
+                            onSave={() => {
+                              if (!newTaskText.trim()) return;
+                              const tgt = newTaskEditFreq;
+                              let updated = (prev => {
+                                const snap = ensureSnapshot(editRoom.id, freq, prev);
+                                return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: snap[editRoom.id][freq].filter((_,idx) => idx !== i) } };
+                              })(customTasks);
+                              updated = (prev => {
+                                const snap = ensureSnapshot(editRoom.id, tgt, prev);
+                                return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [tgt]: [...snap[editRoom.id][tgt], { text: newTaskText.trim(), assignees: newTaskAssignees, time: newTaskTime.trim() }] } };
+                              })(updated);
+                              setCustomTasks(updated); saveCustomTasks(updated);
+                              setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
+                            }}
+                            onCancel={() => { setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
+                          />
+                        ) : (
+                          <div style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"9px 12px", background:"#fff", border:"1px solid #E4E0D8", borderRadius:10 }}>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <p style={{ margin:0, fontSize:13, color:"#1A1A1A" }}>{task.text}</p>
+                              <div style={{ display:"flex", gap:6, marginTop:4, flexWrap:"wrap", alignItems:"center" }}>
+                                {task.assignees?.length > 0 && task.assignees.map(aid => { const m=FAMILY.find(f=>f.id===aid); return m?<Avatar key={aid} member={m} size={16} fontSize={8} />:null; })}
+                                {task.time && <span style={{ fontSize:10, color:"#AAA", background:"#F5F2EC", padding:"1px 6px", borderRadius:6 }}>~{task.time}</span>}
+                              </div>
+                            </div>
+                            <button onClick={() => { setEditingTask({roomId:editRoom.id,freq,index:i}); setNewTaskText(task.text); setNewTaskAssignees(task.assignees||[]); setNewTaskTime(task.time||""); setNewTaskEditFreq(freq); setShowAddTask(false); }} style={{ fontSize:11, color:"#AAA", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Edit</button>
+                            <button onClick={() => { const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }} style={{ fontSize:11, color:"#D47F6B", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Delete</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                  {showAddTask && newTaskFreq===freq && editingTask===null && (
-                    <div style={{ marginBottom:8, padding:"10px 12px", background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10 }}>
-                      <input autoFocus value={newTaskText} onChange={e=>setNewTaskText(e.target.value)} placeholder="Task description" style={{ width:"100%", fontSize:13, padding:"6px 8px", border:"1px solid "+fmr.border, borderRadius:6, fontFamily:"inherit", marginBottom:8, boxSizing:"border-box" }} />
-                      <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:8 }}>
-                        {FAMILY.map(m => (<button key={m.id} onClick={() => setNewTaskAssignees(prev=>prev.includes(m.id)?prev.filter(x=>x!==m.id):[...prev,m.id])} style={{ display:"flex", alignItems:"center", gap:4, padding:"3px 8px", borderRadius:12, border:"1px solid "+(newTaskAssignees.includes(m.id)?m.color:"#DDD"), background:newTaskAssignees.includes(m.id)?m.color+"22":"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:11 }}><Avatar member={m} size={16} fontSize={8} /><span style={{ color:newTaskAssignees.includes(m.id)?m.color:"#777" }}>{m.name}</span></button>))}
-                      </div>
-                      <div style={{ display:"flex", gap:6 }}>
-                        <button onClick={() => { if(!newTaskText.trim()) return; const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:[...snap[editRoom.id][freq],{text:newTaskText.trim(),assignees:newTaskAssignees}]}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ flex:1, padding:"7px", background:fmr.dot, color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:"bold" }}>Save</button>
-                        <button onClick={() => { setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ padding:"7px 14px", background:"#fff", border:"1px solid #DDD", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:12, color:"#888" }}>Cancel</button>
-                      </div>
-                    </div>
-                  )}
-                  {tasks.length===0&&!(showAddTask&&newTaskFreq===freq)&&<p style={{ fontSize:12, color:"#CCC", fontStyle:"italic", margin:"0 0 4px" }}>No {freq.toLowerCase()} tasks</p>}
-                  {tasks.map((task,i) => (
-                    <div key={i} style={{ marginBottom:5 }}>
-                      {editingTask?.roomId===editRoom.id&&editingTask?.freq===freq&&editingTask?.index===i ? (
-                        <div style={{ padding:"10px 12px", background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10 }}>
-                          <input autoFocus value={newTaskText} onChange={e=>setNewTaskText(e.target.value)} style={{ width:"100%", fontSize:13, padding:"6px 8px", border:"1px solid "+fmr.border, borderRadius:6, fontFamily:"inherit", marginBottom:8, boxSizing:"border-box" }} />
-                          <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:8 }}>
-                            {FAMILY.map(m => (<button key={m.id} onClick={() => setNewTaskAssignees(prev=>prev.includes(m.id)?prev.filter(x=>x!==m.id):[...prev,m.id])} style={{ display:"flex", alignItems:"center", gap:4, padding:"3px 8px", borderRadius:12, border:"1px solid "+(newTaskAssignees.includes(m.id)?m.color:"#DDD"), background:newTaskAssignees.includes(m.id)?m.color+"22":"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:11 }}><Avatar member={m} size={16} fontSize={8} /><span style={{ color:newTaskAssignees.includes(m.id)?m.color:"#777" }}>{m.name}</span></button>))}
-                          </div>
-                          <div style={{ display:"flex", gap:6 }}>
-                            <button onClick={() => { if(!newTaskText.trim()) return; const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); const arr=[...snap[editRoom.id][freq]]; arr[i]={text:newTaskText.trim(),assignees:newTaskAssignees}; return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:arr}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ flex:1, padding:"7px", background:fmr.dot, color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:"bold" }}>Save</button>
-                            <button onClick={() => { setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); }} style={{ padding:"7px 14px", background:"#fff", border:"1px solid #DDD", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:12, color:"#888" }}>Cancel</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ display:"flex", alignItems:"center", gap:8, padding:"9px 12px", background:"#fff", border:"1px solid #E4E0D8", borderRadius:10 }}>
-                          <div style={{ flex:1 }}>
-                            <p style={{ margin:0, fontSize:13 }}>{task.text}</p>
-                            {task.assignees?.length>0&&<div style={{ display:"flex", gap:3, marginTop:4 }}>{task.assignees.map(aid=>{ const m=FAMILY.find(f=>f.id===aid); return m?<Avatar key={aid} member={m} size={16} fontSize={8} />:null; })}</div>}
-                          </div>
-                          <button onClick={() => { setEditingTask({roomId:editRoom.id,freq,index:i}); setNewTaskText(task.text); setNewTaskAssignees(task.assignees||[]); setShowAddTask(false); }} style={{ fontSize:11, color:"#AAA", background:"none", border:"none", cursor:"pointer", padding:"4px 6px" }}>Edit</button>
-                          <button onClick={() => { const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }} style={{ fontSize:11, color:"#D47F6B", background:"none", border:"none", cursor:"pointer", padding:"4px 6px" }}>Delete</button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
     </div>
   );
