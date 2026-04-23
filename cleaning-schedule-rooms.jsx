@@ -157,6 +157,8 @@ const levels = [
         { text: "Wipe down kitchen table", time: "0-5 min" },
         { text: "Push in chairs", time: "0-5 min" },
         { text: "Empty trash & recycling", time: "0-5 min" },
+        { text: "Clean up after meals & snacks - dishes in sink (Zach)", time: "0-5 min", assignees: ["zach"] },
+        { text: "Clean up after meals & snacks - dishes in sink (Kyle)", time: "0-5 min", assignees: ["kyle"] },
       ],
       Weekly: [
         { text: "Mop floor", time: "16-30 min" },
@@ -508,6 +510,20 @@ const freqMeta = {
   Annually:  { dot: "#D4445A", bg: "#FDEAED", text: "#7A1020", border: "#EE8898", lightBg: "#FEF4F5" },
 };
 
+const TASK_POINTS = {
+  "0-5 min":        1,
+  "6-15 min":       2,
+  "16-30 min":      3,
+  "31 min - 1 hr":  5,
+  "1-2 hrs":        8,
+  "2-4 hrs":        12,
+  "4+ hrs":         18,
+};
+
+function taskPoints(task) {
+  return TASK_POINTS[task?.time] || 1;
+}
+
 function getPeriodKey(freq, date = new Date()) {
   const y = date.getFullYear(), m = date.getMonth(), d = date.getDate(), day = date.getDay();
   if (freq === "Daily") return "Daily:" + y + "-" + String(m+1).padStart(2,"0") + "-" + String(d).padStart(2,"0");
@@ -781,6 +797,10 @@ export default function CleaningSchedule() {
   const [filterAssigned, setFilterAssigned] = useState("all");
   const [reportResults, setReportResults] = useState(null);
   const [expandedCard, setExpandedCard] = useState(null);
+  const [expandedLeaderWeek, setExpandedLeaderWeek] = useState(null);
+  const [expandedLeaderMonth, setExpandedLeaderMonth] = useState(null);
+  const [allowanceData, setAllowanceData] = useState({});  // { memberId: { balance, history: [{amount, date, note}] } }
+  const [allowanceLoaded, setAllowanceLoaded] = useState(false);
 
   const writingRef = useRef(false);
   const isKidMode = activeMember.isKid;
@@ -916,6 +936,74 @@ export default function CleaningSchedule() {
     await dbSet("customTasks", JSON.stringify(data));
     setTimeout(() => { writingRef.current = false; }, 500);
   }, []);
+
+  const saveAllowance = useCallback(async (data) => {
+    await dbSet("allowance", JSON.stringify(data));
+  }, []);
+
+  // Load allowance from Firebase
+  useEffect(() => {
+    const unsub = dbListen("allowance", (result) => {
+      if (result?.value) setAllowanceData(JSON.parse(result.value));
+      setAllowanceLoaded(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // Award $2/day when a kid completes all their daily tasks for the day
+  // Run whenever completions change
+  const awardedTodayRef = useRef({});
+  useEffect(() => {
+    if (!allowanceLoaded) return;
+    const allowanceKids = FAMILY.filter(f => f.isKid && (f.id === "zach" || f.id === "kyle"));
+    const todayKey = getPeriodKey("Daily");
+
+    allowanceKids.forEach(kid => {
+      // Already awarded today?
+      if (awardedTodayRef.current[kid.id] === todayKey) return;
+
+      // Get all daily tasks visible to this kid
+      let totalDaily = 0, doneDaily = 0;
+      allRooms.forEach(room => {
+        const tasks = getTaskList(room.id, "Daily");
+        const kidTasks = tasks.filter(t => {
+          const nameTag = t.text.match(/\((\w+)\)$/);
+          if (nameTag) return nameTag[1].toLowerCase() === kid.name.toLowerCase();
+          if (room.id === kid.ownRoomId) return true;
+          return (t.assignees || []).includes(kid.id);
+        });
+        kidTasks.forEach((t, idx) => {
+          const fi = tasks.findIndex(ft => ft.text === t.text);
+          if (fi === -1) return;
+          totalDaily++;
+          const baseKey = room.id + "-Daily-" + fi;
+          const kidKey = baseKey + "-" + kid.id;
+          if (completions[kidKey] || completions[baseKey]) doneDaily++;
+        });
+      });
+
+      if (totalDaily > 0 && doneDaily === totalDaily) {
+        // All daily tasks done — award $2 if not already awarded today
+        awardedTodayRef.current[kid.id] = todayKey;
+        setAllowanceData(prev => {
+          const current = prev[kid.id] || { balance: 0, history: [] };
+          // Don't double-award
+          if (current.lastAwardedDay === todayKey) return prev;
+          const updated = {
+            ...prev,
+            [kid.id]: {
+              balance: (current.balance || 0) + 2,
+              lastAwardedDay: todayKey,
+              history: [...(current.history || []), { type: "earn", amount: 2, date: Date.now(), note: "All daily tasks completed" }],
+            }
+          };
+          saveAllowance(updated);
+          return updated;
+        });
+      }
+    });
+  }, [completions, allowanceLoaded]);
+
 
   useEffect(() => {
     if (view !== "history" && view !== "leaderboard" && view !== "status") return;
@@ -1099,7 +1187,7 @@ export default function CleaningSchedule() {
 
   const tabs = isKidMode
     ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["history","History"]]
-    : [["tasks","Tasks"],["status","Status"],["leaderboard","Leaderboard"],["history","History"],["edit","Edit"]];
+    : [["tasks","Tasks"],["status","Status"],["leaderboard","Leaderboard"],["allowance","Allowance"],["history","History"],["edit","Edit"]];
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }} key={activeMember.id}>
@@ -1134,85 +1222,136 @@ export default function CleaningSchedule() {
         const now = new Date();
         const medals = ["🥇","🥈","🥉"];
 
-        // ── Week range ───────────────────────────────────────────────────────
         const weekDay = now.getDay();
-        const weekStart = new Date(now); weekStart.setDate(now.getDate() - weekDay); weekStart.setHours(0,0,0,0);
-        const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23,59,59,999);
-        const weekLabel = weekStart.toLocaleDateString([],{month:"short",day:"numeric"}) + " - " + weekEnd.toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
-
-        // ── Month range ──────────────────────────────────────────────────────
+        const weekStart = new Date(now); weekStart.setDate(now.getDate()-weekDay); weekStart.setHours(0,0,0,0);
+        const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate()+6); weekEnd.setHours(23,59,59,999);
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0, 23, 59, 59, 999);
-        const monthLabel = now.toLocaleDateString([],{month:"long", year:"numeric"});
+        const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59,999);
+        const weekLabel = weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
+        const monthLabel = now.toLocaleDateString([],{month:"long",year:"numeric"});
 
-        // ── Count all completions (current + archive) ────────────────────────
-        function countInRange(from, to) {
-          const counts = {};
-          kids.forEach(k => { counts[k.id] = 0; });
+        function countPoints(from, to) {
+          const points = {}, details = {};
+          kids.forEach(k => { points[k.id] = 0; details[k.id] = []; });
           function scan(obj) {
-            Object.values(obj).forEach(c => {
+            Object.entries(obj).forEach(([key, c]) => {
               if (!c || !c.at || !c.by) return;
               if (!kids.find(k => k.id === c.by)) return;
-              if (c.at >= from && c.at <= to) counts[c.by] = (counts[c.by]||0) + 1;
+              if (c.at < from || c.at > to) return;
+              const room = allRooms.find(r => key.startsWith(r.id+"-"));
+              if (!room) return;
+              const afterRoom = key.slice(room.id.length+1);
+              const afterFreq = afterRoom.slice((c.freq||"").length+1);
+              const taskIndex = parseInt(afterFreq.split("-")[0]);
+              if (isNaN(taskIndex)) return;
+              const taskList = getTaskList(room.id, c.freq);
+              const taskObj = taskList[taskIndex];
+              if (!taskObj) return;
+              const pts = taskPoints(taskObj);
+              const baseKey = room.id+"-"+c.freq+"-"+taskIndex;
+              if (details[c.by].find(d => d.baseKey === baseKey)) return;
+              points[c.by] = (points[c.by]||0) + pts;
+              details[c.by].push({ baseKey, task: taskObj.text, room: room.name, roomIcon: room.icon, freq: c.freq, pts, time: taskObj.time, at: c.at });
             });
           }
           scan(completions);
           Object.values(allArchiveData).forEach(d => scan(d));
-          return counts;
+          return { points, details };
         }
 
-        const weekCounts = countInRange(weekStart.getTime(), weekEnd.getTime());
-        const monthCounts = countInRange(monthStart.getTime(), monthEnd.getTime());
+        const { points: weekPoints, details: weekDetails } = countPoints(weekStart.getTime(), weekEnd.getTime());
+        const { points: monthPoints, details: monthDetails } = countPoints(monthStart.getTime(), monthEnd.getTime());
 
-        const weekSorted = [...kids].sort((a,b) => (weekCounts[b.id]||0) - (weekCounts[a.id]||0));
-        const monthSorted = [...kids].sort((a,b) => (monthCounts[b.id]||0) - (monthCounts[a.id]||0));
+        const weekSorted = [...kids].sort((a,b) => (weekPoints[b.id]||0)-(weekPoints[a.id]||0));
+        const monthSorted = [...kids].sort((a,b) => (monthPoints[b.id]||0)-(monthPoints[a.id]||0));
+        const weekMax = Math.max(...weekSorted.map(k=>weekPoints[k.id]||0), 1);
+        const monthMax = Math.max(...monthSorted.map(k=>monthPoints[k.id]||0), 1);
 
         const weekWinner = weekSorted[0];
-        const weekIsTie = weekSorted.length > 1 && weekCounts[weekSorted[0].id] === weekCounts[weekSorted[1].id] && weekCounts[weekSorted[0].id] > 0;
-        const weekHasActivity = weekSorted.some(k => weekCounts[k.id] > 0);
+        const weekIsTie = weekSorted.length>1 && weekPoints[weekSorted[0].id]===weekPoints[weekSorted[1].id] && weekPoints[weekSorted[0].id]>0;
+        const weekHasActivity = weekSorted.some(k=>weekPoints[k.id]>0);
         const monthWinner = monthSorted[0];
-        const monthIsTie = monthSorted.length > 1 && monthCounts[monthSorted[0].id] === monthCounts[monthSorted[1].id] && monthCounts[monthSorted[0].id] > 0;
-        const monthHasActivity = monthSorted.some(k => monthCounts[k.id] > 0);
+        const monthIsTie = monthSorted.length>1 && monthPoints[monthSorted[0].id]===monthPoints[monthSorted[1].id] && monthPoints[monthSorted[0].id]>0;
+        const monthHasActivity = monthSorted.some(k=>monthPoints[k.id]>0);
 
-        const weekMax = Math.max(...weekSorted.map(k => weekCounts[k.id]||0), 1);
-        const monthMax = Math.max(...monthSorted.map(k => monthCounts[k.id]||0), 1);
-
-        // ── Daily chart data (Sun-Sat this week) ─────────────────────────────
         const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-        const dailyData = {};
-        kids.forEach(k => { dailyData[k.id] = Array(7).fill(0); });
+        const dailyPts = {};
+        kids.forEach(k => { dailyPts[k.id] = Array(7).fill(0); });
         function scanDaily(obj) {
-          Object.values(obj).forEach(c => {
+          Object.entries(obj).forEach(([key, c]) => {
             if (!c || !c.at || !c.by) return;
-            if (!kids.find(k => k.id === c.by)) return;
-            if (c.at >= weekStart.getTime() && c.at <= weekEnd.getTime()) {
-              dailyData[c.by][new Date(c.at).getDay()] += 1;
-            }
+            if (!kids.find(k=>k.id===c.by)) return;
+            if (c.at < weekStart.getTime() || c.at > weekEnd.getTime()) return;
+            const room = allRooms.find(r=>key.startsWith(r.id+"-"));
+            if (!room) return;
+            const afterRoom = key.slice(room.id.length+1);
+            const afterFreq = afterRoom.slice((c.freq||"").length+1);
+            const taskIndex = parseInt(afterFreq.split("-")[0]);
+            if (isNaN(taskIndex)) return;
+            const taskList = getTaskList(room.id, c.freq);
+            const taskObj = taskList[taskIndex];
+            if (!taskObj) return;
+            dailyPts[c.by][new Date(c.at).getDay()] += taskPoints(taskObj);
           });
         }
         scanDaily(completions);
         Object.values(allArchiveData).forEach(d => scanDaily(d));
-        const maxDaily = Math.max(...kids.flatMap(k => dailyData[k.id]), 1);
+        const maxDailyPts = Math.max(...kids.flatMap(k=>dailyPts[k.id]), 1);
         const todayIdx = now.getDay();
 
-        // ── Horizontal bar chart ─────────────────────────────────────────────
-        function HBar({ sorted, counts, maxVal }) {
+        const weekExpandedKid = expandedLeaderWeek;
+        const setWeekExpandedKid = setExpandedLeaderWeek;
+        const monthExpandedKid = expandedLeaderMonth;
+        const setMonthExpandedKid = setExpandedLeaderMonth;
+
+        function HBar({ sorted, points, maxVal, details, expandedKid, setExpandedKid }) {
           return (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               {sorted.map((kid, rank) => {
-                const count = counts[kid.id] || 0;
-                const pct = Math.round(count / maxVal * 100);
+                const pts = points[kid.id]||0;
+                const pct = Math.round(pts/maxVal*100);
+                const isExp = expandedKid === kid.id;
+                const kidDetails = (details[kid.id]||[]).sort((a,b)=>b.pts-a.pts);
                 return (
-                  <div key={kid.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 14, width: 22, textAlign: "center" }}>{count > 0 ? (medals[rank] || "") : ""}</span>
-                    <Avatar member={kid} size={22} fontSize={10} />
-                    <span style={{ fontSize: 12, fontWeight: "bold", color: kid.color, minWidth: 46 }}>{kid.name}</span>
-                    <div style={{ flex: 1, height: 24, background: "#F0EDE6", borderRadius: 6, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: (count === 0 ? 0 : Math.max(pct, 6)) + "%", background: kid.color, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 7, transition: "width 0.6s ease", boxSizing: "border-box" }}>
-                        {count > 0 && <span style={{ fontSize: 10, color: "#fff", fontWeight: "bold" }}>{count}</span>}
+                  <div key={kid.id}>
+                    <div onClick={() => setExpandedKid(isExp ? null : kid.id)} style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer" }}>
+                      <span style={{ fontSize:14, width:22, textAlign:"center" }}>{pts>0?(medals[rank]||""):""}</span>
+                      <Avatar member={kid} size={22} fontSize={10} />
+                      <span style={{ fontSize:12, fontWeight:"bold", color:kid.color, minWidth:46 }}>{kid.name}</span>
+                      <div style={{ flex:1, height:24, background:"#F0EDE6", borderRadius:6, overflow:"hidden" }}>
+                        <div style={{ height:"100%", width:(pts===0?0:Math.max(pct,6))+"%", background:kid.color, borderRadius:6, display:"flex", alignItems:"center", justifyContent:"flex-end", paddingRight:7, transition:"width 0.6s ease", boxSizing:"border-box" }}>
+                          {pts>0 && <span style={{ fontSize:10, color:"#fff", fontWeight:"bold" }}>{pts}</span>}
+                        </div>
                       </div>
+                      {pts===0 && <span style={{ fontSize:11, color:"#CCC", minWidth:14 }}>0</span>}
+                      <span style={{ fontSize:10, color:isExp?kid.color:"#CCC" }}>{isExp?"▲":"▼"}</span>
                     </div>
-                    {count === 0 && <span style={{ fontSize: 11, color: "#CCC", minWidth: 14 }}>0</span>}
+                    {isExp && (
+                      <div style={{ marginLeft:30, marginTop:8, background:kid.color+"0D", borderRadius:10, border:"1px solid "+kid.color+"33", overflow:"hidden" }}>
+                        {kidDetails.length===0 ? (
+                          <p style={{ margin:0, padding:"10px 12px", fontSize:12, color:"#CCC", fontStyle:"italic" }}>No tasks completed yet.</p>
+                        ) : kidDetails.map((d,i) => (
+                          <div key={d.baseKey} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", borderBottom:i<kidDetails.length-1?"1px solid "+kid.color+"22":"none" }}>
+                            <div style={{ width:22, height:22, borderRadius:"50%", background:kid.color, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                              <span style={{ fontSize:9, color:"#fff", fontWeight:"bold" }}>{d.pts}pt</span>
+                            </div>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <p style={{ margin:0, fontSize:12, color:"#1A1A1A" }}>{d.task}</p>
+                              <div style={{ display:"flex", gap:6, alignItems:"center", marginTop:2 }}>
+                                <span style={{ fontSize:10, color:"#888" }}>{d.room}</span>
+                                <span style={{ fontSize:9, padding:"1px 5px", borderRadius:5, background:freqMeta[d.freq]?.bg||"#EEE", color:freqMeta[d.freq]?.text||"#888" }}>{d.freq}</span>
+                                {d.time && <span style={{ fontSize:9, color:"#AAA" }}>~{d.time}</span>}
+                              </div>
+                            </div>
+                            <span style={{ fontSize:9, color:"#CCC", flexShrink:0 }}>{fmt(d.at)}</span>
+                          </div>
+                        ))}
+                        <div style={{ padding:"8px 12px", borderTop:"1px solid "+kid.color+"22", display:"flex", justifyContent:"space-between" }}>
+                          <span style={{ fontSize:11, color:"#888" }}>{kidDetails.length} task{kidDetails.length!==1?"s":""}</span>
+                          <span style={{ fontSize:11, fontWeight:"bold", color:kid.color }}>{pts} pts total</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1220,30 +1359,29 @@ export default function CleaningSchedule() {
           );
         }
 
-        // ── Winner banner ────────────────────────────────────────────────────
-        function WinnerBanner({ winner, isTie, hasActivity, counts, sorted, label }) {
+        function WinnerBanner({ winner, isTie, hasActivity, points, sorted, label }) {
           if (!hasActivity) return (
-            <div style={{ padding: "12px 14px", background: "#FAFAF8", border: "1px solid #E4E0D8", borderRadius: 12, textAlign: "center" }}>
-              <p style={{ margin: 0, fontSize: 12, color: "#CCC" }}>No activity yet</p>
+            <div style={{ padding:"12px 14px", background:"#FAFAF8", border:"1px solid #E4E0D8", borderRadius:12, textAlign:"center" }}>
+              <p style={{ margin:0, fontSize:12, color:"#CCC" }}>No activity yet</p>
             </div>
           );
           if (isTie) return (
-            <div style={{ padding: "12px 14px", background: "#FEFAEC", border: "1px solid #F0DC7A", borderRadius: 12, display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 22 }}>🤝</span>
+            <div style={{ padding:"12px 14px", background:"#FEFAEC", border:"1px solid #F0DC7A", borderRadius:12, display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:22 }}>🤝</span>
               <div>
-                <p style={{ margin: 0, fontSize: 12, fontWeight: "bold", color: "#7A6010" }}>Tie!</p>
-                <p style={{ margin: "2px 0 0", fontSize: 11, color: "#888" }}>{sorted.filter(k=>counts[k.id]===counts[sorted[0].id]).map(k=>k.name).join(" & ")} — {counts[sorted[0].id]} tasks each</p>
+                <p style={{ margin:0, fontSize:12, fontWeight:"bold", color:"#7A6010" }}>Tie!</p>
+                <p style={{ margin:"2px 0 0", fontSize:11, color:"#888" }}>{sorted.filter(k=>points[k.id]===points[sorted[0].id]).map(k=>k.name).join(" & ")} — {points[sorted[0].id]} pts each</p>
               </div>
             </div>
           );
           return (
-            <div style={{ padding: "14px", background: winner.color + "15", border: "2px solid " + winner.color + "44", borderRadius: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 26 }}>👑</span>
-                <div style={{ flex: 1 }}>
-                  <p style={{ margin: 0, fontSize: 10, color: winner.color, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: "bold" }}>{label} Leader</p>
-                  <p style={{ margin: "2px 0 0", fontSize: 20, fontWeight: "bold", color: winner.color }}>{winner.name}</p>
-                  <p style={{ margin: "2px 0 0", fontSize: 11, color: "#888" }}>{counts[winner.id]} tasks completed</p>
+            <div style={{ padding:"14px", background:winner.color+"15", border:"2px solid "+winner.color+"44", borderRadius:12 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <span style={{ fontSize:26 }}>👑</span>
+                <div style={{ flex:1 }}>
+                  <p style={{ margin:0, fontSize:10, color:winner.color, textTransform:"uppercase", letterSpacing:"0.08em", fontWeight:"bold" }}>{label} Leader</p>
+                  <p style={{ margin:"2px 0 0", fontSize:20, fontWeight:"bold", color:winner.color }}>{winner.name}</p>
+                  <p style={{ margin:"2px 0 0", fontSize:11, color:"#888" }}>{points[winner.id]} pts earned</p>
                 </div>
                 <Avatar member={winner} size={44} fontSize={18} />
               </div>
@@ -1252,71 +1390,66 @@ export default function CleaningSchedule() {
         }
 
         return (
-          <div style={{ paddingBottom: 60 }}>
+          <div style={{ paddingBottom:60 }}>
+            <div style={{ padding:"8px 14px 0" }}>
+              <p style={{ margin:0, fontSize:9, color:"#AAA", fontStyle:"italic" }}>Points: 1=0-5min · 2=6-15min · 3=16-30min · 5=31min-1hr · 8=1-2hr · 12=2-4hr · 18=4hr+</p>
+            </div>
 
-            {/* ── WEEKLY SECTION ── */}
-            <div style={{ padding: "14px 14px 0" }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
-                <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>This Week</p>
-                <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>{weekLabel}</p>
+            <div style={{ padding:"10px 14px 0" }}>
+              <div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", marginBottom:10 }}>
+                <p style={{ margin:0, fontSize:13, fontWeight:"bold", color:"#1A1A1A" }}>This Week</p>
+                <p style={{ margin:0, fontSize:10, color:"#AAA" }}>{weekLabel}</p>
               </div>
-              <WinnerBanner winner={weekWinner} isTie={weekIsTie} hasActivity={weekHasActivity} counts={weekCounts} sorted={weekSorted} label="Week" />
+              <WinnerBanner winner={weekWinner} isTie={weekIsTie} hasActivity={weekHasActivity} points={weekPoints} sorted={weekSorted} label="Week" />
+            </div>
+            <div style={{ margin:"10px 14px 0", background:"#fff", borderRadius:14, border:"1px solid #E4E0D8", padding:"14px" }}>
+              <HBar sorted={weekSorted} points={weekPoints} maxVal={weekMax} details={weekDetails} expandedKid={weekExpandedKid} setExpandedKid={setWeekExpandedKid} />
             </div>
 
-            {/* Weekly bar chart */}
-            <div style={{ margin: "10px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px" }}>
-              <HBar sorted={weekSorted} counts={weekCounts} maxVal={weekMax} />
-            </div>
-
-            {/* ── DAILY CHART ── */}
-            <div style={{ margin: "14px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px 14px 10px" }}>
-              <p style={{ margin: "0 0 12px", fontSize: 11, fontWeight: "bold", color: "#1A1A1A" }}>Daily Breakdown This Week</p>
-              <div style={{ display: "flex", gap: 5 }}>
+            <div style={{ margin:"14px 14px 0", background:"#fff", borderRadius:14, border:"1px solid #E4E0D8", padding:"14px 14px 10px" }}>
+              <p style={{ margin:"0 0 12px", fontSize:11, fontWeight:"bold", color:"#1A1A1A" }}>Daily Points This Week</p>
+              <div style={{ display:"flex", gap:5 }}>
                 {dayNames.map((dayName, dayIdx) => {
-                  const isToday = dayIdx === todayIdx;
-                  const isFuture = dayIdx > todayIdx;
-                  const dayTotal = kids.reduce((s,k) => s + (dailyData[k.id][dayIdx]||0), 0);
+                  const isToday = dayIdx===todayIdx, isFuture = dayIdx>todayIdx;
+                  const dayTotal = kids.reduce((s,k)=>s+(dailyPts[k.id][dayIdx]||0),0);
                   return (
-                    <div key={dayName} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                      <div style={{ width: "100%", height: 90, display: "flex", flexDirection: "column-reverse", justifyContent: "flex-start", gap: 1, opacity: isFuture ? 0.2 : 1 }}>
+                    <div key={dayName} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
+                      <div style={{ width:"100%", height:90, display:"flex", flexDirection:"column-reverse", justifyContent:"flex-start", gap:1, opacity:isFuture?0.2:1 }}>
                         {kids.map(kid => {
-                          const count = dailyData[kid.id][dayIdx] || 0;
-                          const h = count === 0 ? 0 : Math.max(Math.round(count / maxDaily * 82), 7);
-                          return <div key={kid.id} style={{ width: "100%", height: h, background: kid.color, borderRadius: 3 }} />;
+                          const pts = dailyPts[kid.id][dayIdx]||0;
+                          const h = pts===0?0:Math.max(Math.round(pts/maxDailyPts*82),7);
+                          return <div key={kid.id} style={{ width:"100%", height:h, background:kid.color, borderRadius:3 }} />;
                         })}
                       </div>
-                      {isToday && <div style={{ width: "100%", height: 2, background: "#1A1A1A", borderRadius: 2 }} />}
-                      <span style={{ fontSize: 9, color: isToday ? "#1A1A1A" : "#AAA", fontWeight: isToday ? "bold" : "normal" }}>{dayName}</span>
-                      {dayTotal > 0 && !isFuture && <span style={{ fontSize: 9, color: "#888" }}>{dayTotal}</span>}
+                      {isToday && <div style={{ width:"100%", height:2, background:"#1A1A1A", borderRadius:2 }} />}
+                      <span style={{ fontSize:9, color:isToday?"#1A1A1A":"#AAA", fontWeight:isToday?"bold":"normal" }}>{dayName}</span>
+                      {dayTotal>0&&!isFuture&&<span style={{ fontSize:9, color:"#888" }}>{dayTotal}</span>}
                     </div>
                   );
                 })}
               </div>
-              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                {kids.map(kid => (
-                  <div key={kid.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: 2, background: kid.color }} />
-                    <span style={{ fontSize: 10, color: kid.color, fontWeight: "bold" }}>{kid.name}</span>
+              <div style={{ display:"flex", gap:10, marginTop:10, flexWrap:"wrap" }}>
+                {kids.map(kid=>(
+                  <div key={kid.id} style={{ display:"flex", alignItems:"center", gap:4 }}>
+                    <div style={{ width:8, height:8, borderRadius:2, background:kid.color }} />
+                    <span style={{ fontSize:10, color:kid.color, fontWeight:"bold" }}>{kid.name}</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* ── MONTHLY SECTION ── */}
-            <div style={{ padding: "18px 14px 0" }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
-                <p style={{ margin: 0, fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>This Month</p>
-                <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>{monthLabel}</p>
+            <div style={{ padding:"18px 14px 0" }}>
+              <div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", marginBottom:10 }}>
+                <p style={{ margin:0, fontSize:13, fontWeight:"bold", color:"#1A1A1A" }}>This Month</p>
+                <p style={{ margin:0, fontSize:10, color:"#AAA" }}>{monthLabel}</p>
               </div>
-              <WinnerBanner winner={monthWinner} isTie={monthIsTie} hasActivity={monthHasActivity} counts={monthCounts} sorted={monthSorted} label="Month" />
+              <WinnerBanner winner={monthWinner} isTie={monthIsTie} hasActivity={monthHasActivity} points={monthPoints} sorted={monthSorted} label="Month" />
+            </div>
+            <div style={{ margin:"10px 14px 0", background:"#fff", borderRadius:14, border:"1px solid #E4E0D8", padding:"14px" }}>
+              <HBar sorted={monthSorted} points={monthPoints} maxVal={monthMax} details={monthDetails} expandedKid={monthExpandedKid} setExpandedKid={setMonthExpandedKid} />
             </div>
 
-            {/* Monthly bar chart */}
-            <div style={{ margin: "10px 14px 0", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px" }}>
-              <HBar sorted={monthSorted} counts={monthCounts} maxVal={monthMax} />
-            </div>
-
-            <p style={{ margin: "14px 14px 4px", fontSize: 10, color: "#CCC", fontStyle: "italic", textAlign: "center" }}>Weekly standings reset every Sunday</p>
+            <p style={{ margin:"14px 14px 4px", fontSize:10, color:"#CCC", fontStyle:"italic", textAlign:"center" }}>Weekly standings reset every Sunday</p>
           </div>
         );
       })()}
@@ -1333,6 +1466,108 @@ export default function CleaningSchedule() {
         RoomIcon={RoomIcon}
         FAMILY={FAMILY}
       />}
+
+      {/* ═══ ALLOWANCE VIEW ═══ */}
+      {view === "allowance" && (() => {
+        const allowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
+
+        function handlePayout(kid) {
+          const current = allowanceData[kid.id] || { balance: 0, history: [] };
+          const amount = current.balance || 0;
+          if (amount <= 0) return;
+          const updated = {
+            ...allowanceData,
+            [kid.id]: {
+              balance: 0,
+              lastAwardedDay: current.lastAwardedDay,
+              history: [...(current.history || []), {
+                type: "payout",
+                amount,
+                date: Date.now(),
+                note: "Payout to " + kid.name,
+              }],
+            }
+          };
+          setAllowanceData(updated);
+          saveAllowance(updated);
+        }
+
+        return (
+          <div style={{ paddingBottom: 60 }}>
+            <div style={{ padding: "14px 14px 0" }}>
+              <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>Allowance Tracker</p>
+              <p style={{ margin: "0 0 16px", fontSize: 11, color: "#AAA" }}>Zach & Kyle each earn $2 when all their daily tasks are completed. Tap Payout to reset their balance.</p>
+            </div>
+
+            {/* Balance cards */}
+            <div style={{ padding: "0 14px", display: "flex", gap: 10, marginBottom: 20 }}>
+              {allowanceKids.map(kid => {
+                const data = allowanceData[kid.id] || { balance: 0, history: [] };
+                const balance = data.balance || 0;
+                const payouts = (data.history || []).filter(h => h.type === "payout");
+                const lastPayout = payouts.length > 0 ? payouts[payouts.length - 1] : null;
+                return (
+                  <div key={kid.id} style={{ flex: 1, background: "#fff", borderRadius: 14, border: "2px solid " + kid.color + "55", overflow: "hidden" }}>
+                    <div style={{ padding: "14px", background: kid.color + "12" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                        <Avatar member={kid} size={30} fontSize={13} />
+                        <span style={{ fontSize: 14, fontWeight: "bold", color: kid.color }}>{kid.name}</span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 32, fontWeight: "bold", color: kid.color, lineHeight: 1 }}>${balance.toFixed(2)}</p>
+                      <p style={{ margin: "4px 0 0", fontSize: 10, color: "#AAA" }}>current balance</p>
+                    </div>
+                    <div style={{ padding: "10px 14px 12px" }}>
+                      {lastPayout && (
+                        <p style={{ margin: "0 0 10px", fontSize: 10, color: "#AAA" }}>
+                          Last paid ${lastPayout.amount.toFixed(2)} on {new Date(lastPayout.date).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                        </p>
+                      )}
+                      <button
+                        onClick={() => handlePayout(kid)}
+                        disabled={balance <= 0}
+                        style={{ width: "100%", padding: "8px", background: balance > 0 ? kid.color : "#EEE", color: balance > 0 ? "#fff" : "#BBB", border: "none", borderRadius: 8, cursor: balance > 0 ? "pointer" : "not-allowed", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}
+                      >
+                        {balance > 0 ? "Pay Out $" + balance.toFixed(2) : "Nothing to pay"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* History per kid */}
+            {allowanceKids.map(kid => {
+              const data = allowanceData[kid.id] || { balance: 0, history: [] };
+              const history = [...(data.history || [])].reverse();
+              if (history.length === 0) return null;
+              return (
+                <div key={kid.id} style={{ margin: "0 14px 16px" }}>
+                  <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: "bold", color: kid.color, textTransform: "uppercase", letterSpacing: "0.06em" }}>{kid.name}'s History</p>
+                  <div style={{ background: "#fff", borderRadius: 12, border: "1px solid " + kid.color + "33", overflow: "hidden" }}>
+                    {history.map((entry, i) => {
+                      const isPayout = entry.type === "payout";
+                      return (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: i < history.length - 1 ? "1px solid #F5F2EC" : "none" }}>
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: isPayout ? "#D47F6B22" : kid.color + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <span style={{ fontSize: 13 }}>{isPayout ? "💸" : "✅"}</span>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{entry.note}</p>
+                            <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(entry.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}</p>
+                          </div>
+                          <span style={{ fontSize: 13, fontWeight: "bold", color: isPayout ? "#D47F6B" : kid.color, flexShrink: 0 }}>
+                            {isPayout ? "-" : "+"}${entry.amount.toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* ═══ HISTORY VIEW ═══ */}
       {view === "history" && (
