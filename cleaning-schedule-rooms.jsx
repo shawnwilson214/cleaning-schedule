@@ -75,108 +75,425 @@ function RoomIcon({ icon, size = 17 }) {
 const levels = [
   { id: "basement", label: "Basement", color: "#6B7FD4", icon: "\uD83C\uDFE0", rooms: [
     { id: "bsmt-bedroom", name: "Basement Bedroom", icon: "\uD83D\uDECF\uFE0F", tasks: { Daily: [], Weekly: [],
-      Monthly: ["Vacuum or sweep floor","Dust surfaces & furniture","Empty trash bin","Clean window & sill"],
-      Quarterly: ["Wipe baseboards & light switches","Dust blinds","Change & launder bed linens","Wash curtains","Declutter & donate unused items"],
-      Annually: ["Deep clean carpets or rugs","Wipe walls"] }},
+      Monthly: [
+        { text: "Vacuum or sweep floor", time: "6-15 min" },
+        { text: "Dust surfaces & furniture", time: "6-15 min" },
+        { text: "Empty trash bin", time: "0-5 min" },
+        { text: "Clean window & sill", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Change & launder bed linens", time: "31 min - 1 hr" },
+        { text: "Wash curtains", time: "1-2 hrs" },
+        { text: "Declutter & donate unused items", time: "1-2 hrs" },
+      ],
+      Annually: [
+        { text: "Deep clean carpets or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "bsmt-bathroom", name: "Basement Bathroom", icon: "\uD83D\uDEBF", tasks: { Daily: [], Weekly: [],
-      Monthly: ["Scrub toilet (inside & outside)","Clean sink & countertop","Scrub tub or shower","Mop floor","Wipe mirror","Replace hand towel","Empty trash"],
-      Quarterly: ["Wipe baseboards & light switches","Wipe cabinet fronts","Wash bath mat","Wash shower curtain or clean door","Declutter toiletries"],
-      Annually: ["Wipe walls"] }},
+      Monthly: [
+        { text: "Scrub toilet (inside & outside)", time: "6-15 min" },
+        { text: "Clean sink & countertop", time: "6-15 min" },
+        { text: "Scrub tub or shower", time: "16-30 min" },
+        { text: "Mop floor", time: "6-15 min" },
+        { text: "Wipe mirror", time: "0-5 min" },
+        { text: "Replace hand towel", time: "0-5 min" },
+        { text: "Empty trash", time: "0-5 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Wipe cabinet fronts", time: "6-15 min" },
+        { text: "Wash bath mat", time: "31 min - 1 hr" },
+        { text: "Wash shower curtain or clean door", time: "16-30 min" },
+        { text: "Declutter toiletries", time: "6-15 min" },
+      ],
+      Annually: [
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "bsmt-family", name: "Basement Family Room", icon: "\uD83C\uDFAE", tasks: {
-      Daily: ["Tidy up - return items to their place"], Weekly: [],
-      Monthly: ["Vacuum or sweep floor","Dust surfaces, shelves & electronics","Empty trash","Vacuum upholstered furniture","Wipe down remote controls","Dust toys & shelving","Clean window & sill"],
-      Quarterly: ["Wipe baseboards & light switches","Dust blinds","Wash throw blankets & pillow covers","Declutter games, toys & media"],
-      Annually: ["Deep clean carpets or rugs","Wipe walls"] }},
+      Daily: [
+        { text: "Tidy up - return items to their place", time: "6-15 min" },
+      ],
+      Weekly: [],
+      Monthly: [
+        { text: "Vacuum or sweep floor", time: "6-15 min" },
+        { text: "Dust surfaces, shelves & electronics", time: "16-30 min" },
+        { text: "Empty trash", time: "0-5 min" },
+        { text: "Vacuum upholstered furniture", time: "6-15 min" },
+        { text: "Wipe down remote controls", time: "0-5 min" },
+        { text: "Dust toys & shelving", time: "6-15 min" },
+        { text: "Clean window & sill", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Wash throw blankets & pillow covers", time: "31 min - 1 hr" },
+        { text: "Declutter games, toys & media", time: "31 min - 1 hr" },
+      ],
+      Annually: [
+        { text: "Deep clean carpets or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "bsmt-utility", name: "Utility Room", icon: "\uD83D\uDD27", tasks: {
       Daily: [], Weekly: [], Monthly: [],
-      Quarterly: ["Change furnace filter","Wipe baseboards & light switches"],
-      Annually: ["Wipe walls"] }},
+      Quarterly: [
+        { text: "Change furnace filter", time: "6-15 min" },
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+      ],
+      Annually: [
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
   ]},
   { id: "first", label: "First Level", color: "#D47F6B", icon: "\uD83C\uDF73", rooms: [
     { id: "kitchen-dining", name: "Kitchen & Dining Area", icon: "\uD83C\uDF73", tasks: {
-      Daily: ["Clear countertops & table","Wipe countertops & stovetop","Wash dishes / run dishwasher","Put dishes away","Wipe sink & faucet","Wipe down kitchen table","Push in chairs","Empty trash & recycling"],
-      Weekly: ["Mop floor","Clean microwave inside & out","Wipe small appliances","Wipe exterior of fridge, oven & dishwasher","Throw out old & expired food from refrigerator","Change dish towels","Wipe chair seats & backs","Clean sliding glass door"],
-      Monthly: ["Clean refrigerator inside (wipe shelves & drawers)","Clean behind & under small appliances","Clean windows","Dust light fixture over table"],
-      Quarterly: ["Wipe cabinet fronts & handles","Wipe baseboards & light switches","Dust blinds","Deep clean oven","Organize pantry & check for expired items","Wash or replace dish rack","Deep clean chairs (scrub or wipe thoroughly)","Launder curtains"],
-      Annually: ["Pull out fridge & clean behind","Deep clean all cabinets inside","Wipe walls"] }},
+      Daily: [
+        { text: "Clear countertops & table", time: "0-5 min" },
+        { text: "Wipe countertops & stovetop", time: "6-15 min" },
+        { text: "Wash dishes / run dishwasher", time: "6-15 min" },
+        { text: "Put dishes away", time: "6-15 min" },
+        { text: "Wipe sink & faucet", time: "0-5 min" },
+        { text: "Wipe down kitchen table", time: "0-5 min" },
+        { text: "Push in chairs", time: "0-5 min" },
+        { text: "Empty trash & recycling", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Mop floor", time: "16-30 min" },
+        { text: "Clean microwave inside & out", time: "6-15 min" },
+        { text: "Wipe small appliances", time: "6-15 min" },
+        { text: "Wipe exterior of fridge, oven & dishwasher", time: "6-15 min" },
+        { text: "Throw out old & expired food from refrigerator", time: "6-15 min" },
+        { text: "Change dish towels", time: "0-5 min" },
+        { text: "Wipe chair seats & backs", time: "6-15 min" },
+        { text: "Clean sliding glass door", time: "6-15 min" },
+      ],
+      Monthly: [
+        { text: "Clean refrigerator inside (wipe shelves & drawers)", time: "31 min - 1 hr" },
+        { text: "Clean behind & under small appliances", time: "16-30 min" },
+        { text: "Clean windows", time: "16-30 min" },
+        { text: "Dust light fixture over table", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe cabinet fronts & handles", time: "16-30 min" },
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Deep clean oven", time: "1-2 hrs" },
+        { text: "Organize pantry & check for expired items", time: "31 min - 1 hr" },
+        { text: "Wash or replace dish rack", time: "6-15 min" },
+        { text: "Deep clean chairs (scrub or wipe thoroughly)", time: "16-30 min" },
+        { text: "Launder curtains", time: "1-2 hrs" },
+      ],
+      Annually: [
+        { text: "Pull out fridge & clean behind", time: "31 min - 1 hr" },
+        { text: "Deep clean all cabinets inside", time: "2-4 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "living", name: "Living Room", icon: "\uD83D\uDECB\uFE0F", tasks: {
-      Daily: ["Tidy up - put items away","Run robot vacuum on floor","Empty robot vacuum bin"], Weekly: [],
-      Monthly: ["Dust surfaces, shelves, TV & decor","Vacuum upholstered furniture & under cushions","Clean windows","Wipe remotes & electronics"],
-      Quarterly: ["Wipe baseboards & light switches","Dust ceiling fan","Dust blinds","Wash throw blankets & pillow covers","Move furniture to clean underneath","Launder curtains","Declutter shelves & decor"],
-      Annually: ["Deep clean carpet or rugs","Wipe walls"] }},
+      Daily: [
+        { text: "Tidy up - put items away", time: "0-5 min" },
+        { text: "Run robot vacuum on floor", time: "0-5 min" },
+        { text: "Empty robot vacuum bin", time: "0-5 min" },
+      ],
+      Weekly: [],
+      Monthly: [
+        { text: "Dust surfaces, shelves, TV & decor", time: "16-30 min" },
+        { text: "Vacuum upholstered furniture & under cushions", time: "16-30 min" },
+        { text: "Clean windows", time: "16-30 min" },
+        { text: "Wipe remotes & electronics", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Dust ceiling fan", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Wash throw blankets & pillow covers", time: "31 min - 1 hr" },
+        { text: "Move furniture to clean underneath", time: "16-30 min" },
+        { text: "Launder curtains", time: "1-2 hrs" },
+        { text: "Declutter shelves & decor", time: "31 min - 1 hr" },
+      ],
+      Annually: [
+        { text: "Deep clean carpet or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "main-bathroom", name: "Main Bathroom", icon: "\uD83D\uDEBD", tasks: {
-      Daily: ["Wipe sink & faucet"],
-      Weekly: ["Scrub toilet (inside & outside)","Clean sink & countertop","Mop floor","Wipe mirror","Empty trash","Replace hand towel"],
-      Monthly: ["Clean window & sill"],
-      Quarterly: ["Wipe baseboards & light switches","Wipe cabinet fronts & shelves","Wash window treatment","Declutter medicine cabinet & toiletries"],
-      Annually: ["Wipe walls"] }},
+      Daily: [
+        { text: "Wipe sink & faucet", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Scrub toilet (inside & outside)", time: "6-15 min" },
+        { text: "Clean sink & countertop", time: "6-15 min" },
+        { text: "Mop floor", time: "6-15 min" },
+        { text: "Wipe mirror", time: "0-5 min" },
+        { text: "Empty trash", time: "0-5 min" },
+        { text: "Replace hand towel", time: "0-5 min" },
+      ],
+      Monthly: [
+        { text: "Clean window & sill", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Wipe cabinet fronts & shelves", time: "6-15 min" },
+        { text: "Wash window treatment", time: "31 min - 1 hr" },
+        { text: "Declutter medicine cabinet & toiletries", time: "6-15 min" },
+      ],
+      Annually: [
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "office", name: "Office", icon: "\uD83D\uDCBB", tasks: {
-      Daily: ["Clear desk of dishes & trash"],
-      Weekly: ["Wipe desk surface"],
-      Monthly: ["Dust desk, monitor & shelves","Dust keyboard, mouse & cords","Clean window","Organize paperwork & files"],
-      Quarterly: ["Wipe baseboards & light switches","Dust ceiling fan","Dust blinds","Clean chair","Launder curtains","Declutter desk & shelves","Shred unnecessary documents"],
-      Annually: ["Deep clean carpet or rugs","Wipe walls"] }},
+      Daily: [
+        { text: "Clear desk of dishes & trash", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Wipe desk surface", time: "0-5 min" },
+      ],
+      Monthly: [
+        { text: "Dust desk, monitor & shelves", time: "16-30 min" },
+        { text: "Dust keyboard, mouse & cords", time: "6-15 min" },
+        { text: "Clean window", time: "6-15 min" },
+        { text: "Organize paperwork & files", time: "16-30 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Dust ceiling fan", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Clean chair", time: "6-15 min" },
+        { text: "Launder curtains", time: "1-2 hrs" },
+        { text: "Declutter desk & shelves", time: "31 min - 1 hr" },
+        { text: "Shred unnecessary documents", time: "16-30 min" },
+      ],
+      Annually: [
+        { text: "Deep clean carpet or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "entryway", name: "Entryway", icon: "\uD83D\uDEAA", tasks: {
-      Daily: ["Hang up coats, bags & shoes to their spots","Clear items from stairs"],
-      Weekly: ["Mop floor","Organize shoes & jackets"],
-      Monthly: ["Dust furniture & decor","Vacuum stairs","Clean light fixture","Clean window & sill"],
-      Quarterly: ["Wipe baseboards & light switches","Wipe front door inside & out","Wipe baseboards & door frame","Dust blinds","Deep clean door mat","Declutter coats & shoes for season"],
-      Annually: ["Wipe walls"] }},
+      Daily: [
+        { text: "Hang up coats, bags & shoes to their spots", time: "0-5 min" },
+        { text: "Clear items from stairs", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Mop floor", time: "6-15 min" },
+        { text: "Organize shoes & jackets", time: "6-15 min" },
+      ],
+      Monthly: [
+        { text: "Dust furniture & decor", time: "6-15 min" },
+        { text: "Vacuum stairs", time: "6-15 min" },
+        { text: "Clean light fixture", time: "6-15 min" },
+        { text: "Clean window & sill", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Wipe front door inside & out", time: "6-15 min" },
+        { text: "Wipe baseboards & door frame", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Deep clean door mat", time: "6-15 min" },
+        { text: "Declutter coats & shoes for season", time: "16-30 min" },
+      ],
+      Annually: [
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
   ]},
   { id: "top", label: "Top Level", color: "#6DB894", icon: "\uD83D\uDECC", rooms: [
     { id: "master-bed", name: "Master Bedroom", icon: "\uD83D\uDC51", tasks: {
-      Daily: ["Make bed","Put clothes away or in hamper","Clear room of dirty dishes"],
-      Weekly: ["Run robot vacuum on floor","Empty robot vacuum bin","Change bed linens"],
-      Monthly: ["Dust surfaces & furniture","Clean windows"],
-      Quarterly: ["Wipe baseboards & light switches","Dust ceiling fan","Dust blinds","Launder curtains","Declutter closet"],
-      Annually: ["Deep clean carpets or rugs","Wipe walls"] }},
+      Daily: [
+        { text: "Make bed", time: "0-5 min" },
+        { text: "Put clothes away or in hamper", time: "0-5 min" },
+        { text: "Clear room of dirty dishes", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Run robot vacuum on floor", time: "0-5 min" },
+        { text: "Empty robot vacuum bin", time: "0-5 min" },
+        { text: "Change bed linens", time: "16-30 min" },
+      ],
+      Monthly: [
+        { text: "Dust surfaces & furniture", time: "16-30 min" },
+        { text: "Clean windows", time: "16-30 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Dust ceiling fan", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Launder curtains", time: "1-2 hrs" },
+        { text: "Declutter closet", time: "1-2 hrs" },
+      ],
+      Annually: [
+        { text: "Deep clean carpets or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "master-bath", name: "Master Bathroom", icon: "\uD83D\uDEC1", tasks: {
       Daily: [],
-      Weekly: ["Clean toilet","Clean sink & countertop","Clean mirror","Scrub shower","Mop floor","Replace hand towel"],
-      Monthly: ["Scrub tub / shower deeply","Wash bath mat","Clean window & sill"],
-      Quarterly: ["Wipe baseboards & light switches","Wipe cabinet fronts","Dust blinds","Wash window treatment"],
-      Annually: ["Wipe walls"] }},
+      Weekly: [
+        { text: "Clean toilet", time: "6-15 min" },
+        { text: "Clean sink & countertop", time: "6-15 min" },
+        { text: "Clean mirror", time: "0-5 min" },
+        { text: "Scrub shower", time: "16-30 min" },
+        { text: "Mop floor", time: "6-15 min" },
+        { text: "Replace hand towel", time: "0-5 min" },
+      ],
+      Monthly: [
+        { text: "Scrub tub / shower deeply", time: "16-30 min" },
+        { text: "Wash bath mat", time: "31 min - 1 hr" },
+        { text: "Clean window & sill", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Wipe cabinet fronts", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Wash window treatment", time: "31 min - 1 hr" },
+      ],
+      Annually: [
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "zach-room", name: "Zach's Bedroom", icon: { type: "letter", value: "Z", color: "#6B7FD4" }, tasks: {
-      Daily: ["Make bed","Put clothes away or in hamper","Clear room of dirty dishes"],
-      Weekly: ["Change bed linens","Empty trash bin"],
-      Monthly: ["Dust desk, shelves & electronics","Clean windows & window sills","Organize desk & shelves"],
-      Quarterly: ["Wipe baseboards & light switch","Dust ceiling fan","Dust blinds","Clean computer tower","Declutter clothes, games & items"],
-      Annually: ["Deep clean carpets or rugs","Wipe walls"] }},
+      Daily: [
+        { text: "Make bed", time: "0-5 min" },
+        { text: "Put clothes away or in hamper", time: "0-5 min" },
+        { text: "Clear room of dirty dishes", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Change bed linens", time: "16-30 min" },
+        { text: "Empty trash bin", time: "0-5 min" },
+      ],
+      Monthly: [
+        { text: "Dust desk, shelves & electronics", time: "16-30 min" },
+        { text: "Clean windows & window sills", time: "16-30 min" },
+        { text: "Organize desk & shelves", time: "16-30 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switch", time: "16-30 min" },
+        { text: "Dust ceiling fan", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Clean computer tower", time: "6-15 min" },
+        { text: "Declutter clothes, games & items", time: "1-2 hrs" },
+      ],
+      Annually: [
+        { text: "Deep clean carpets or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "kyle-room", name: "Kyle's Bedroom", icon: { type: "letter", value: "K", color: "#E8784A" }, tasks: {
-      Daily: ["Make bed","Put clothes away or in hamper","Clear room of dirty dishes"],
-      Weekly: ["Change bed linens","Empty trash bin"],
-      Monthly: ["Dust desk, shelves & electronics","Clean windows & window sills","Organize desk & shelves"],
-      Quarterly: ["Wipe baseboards & light switch","Dust ceiling fan","Dust blinds","Clean computer tower","Declutter clothes & items"],
-      Annually: ["Deep clean carpets or rugs","Wipe walls"] }},
+      Daily: [
+        { text: "Make bed", time: "0-5 min" },
+        { text: "Put clothes away or in hamper", time: "0-5 min" },
+        { text: "Clear room of dirty dishes", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Change bed linens", time: "16-30 min" },
+        { text: "Empty trash bin", time: "0-5 min" },
+      ],
+      Monthly: [
+        { text: "Dust desk, shelves & electronics", time: "16-30 min" },
+        { text: "Clean windows & window sills", time: "16-30 min" },
+        { text: "Organize desk & shelves", time: "16-30 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switch", time: "16-30 min" },
+        { text: "Dust ceiling fan", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Clean computer tower", time: "6-15 min" },
+        { text: "Declutter clothes & items", time: "1-2 hrs" },
+      ],
+      Annually: [
+        { text: "Deep clean carpets or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "lucas-room", name: "Lucas's Bedroom", icon: { type: "letter", value: "L", color: "#3DAA6E" }, tasks: {
-      Daily: ["Tidy toys and books","Make bed (assisted)","Put clothes away or in hamper"],
-      Weekly: ["Change bed linens"],
-      Monthly: ["Dust desk, shelves & electronics","Clean windows & window sills","Sanitize frequently touched toys"],
-      Quarterly: ["Wipe baseboards & light switch","Dust ceiling fan","Dust blinds","Declutter outgrown toys & clothes"],
-      Annually: ["Deep clean carpets or rugs","Wipe walls"] }},
+      Daily: [
+        { text: "Tidy toys and books", time: "0-5 min" },
+        { text: "Make bed (assisted)", time: "0-5 min" },
+        { text: "Put clothes away or in hamper", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Change bed linens", time: "16-30 min" },
+      ],
+      Monthly: [
+        { text: "Dust desk, shelves & electronics", time: "16-30 min" },
+        { text: "Clean windows & window sills", time: "16-30 min" },
+        { text: "Sanitize frequently touched toys", time: "16-30 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switch", time: "16-30 min" },
+        { text: "Dust ceiling fan", time: "6-15 min" },
+        { text: "Dust blinds", time: "6-15 min" },
+        { text: "Declutter outgrown toys & clothes", time: "1-2 hrs" },
+      ],
+      Annually: [
+        { text: "Deep clean carpets or rugs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "kids-bathroom", name: "Kids Bathroom", icon: "\uD83D\uDEC1", tasks: {
-      Daily: ["Wipe sink after use (Zach)","Wipe sink after use (Kyle)","Tidy bathroom - pick up laundry from floor"],
-      Weekly: ["Scrub toilet (inside & outside)","Clean sink & countertop","Scrub tub or shower","Mop floor","Wipe mirror","Empty trash","Replace hand towel"],
-      Monthly: ["Wash bath mat","Organize kids toiletries & products"],
-      Quarterly: ["Wipe baseboards & light switches","Wipe cabinet fronts","Wash shower curtain & liner","Declutter expired or unused products"],
-      Annually: ["Wipe walls"] }},
+      Daily: [
+        { text: "Wipe sink after use (Zach)", time: "0-5 min" },
+        { text: "Wipe sink after use (Kyle)", time: "0-5 min" },
+        { text: "Tidy bathroom - pick up laundry from floor", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Scrub toilet (inside & outside)", time: "6-15 min" },
+        { text: "Clean sink & countertop", time: "6-15 min" },
+        { text: "Scrub tub or shower", time: "16-30 min" },
+        { text: "Mop floor", time: "6-15 min" },
+        { text: "Wipe mirror", time: "0-5 min" },
+        { text: "Empty trash", time: "0-5 min" },
+        { text: "Replace hand towel", time: "0-5 min" },
+      ],
+      Monthly: [
+        { text: "Wash bath mat", time: "31 min - 1 hr" },
+        { text: "Organize kids toiletries & products", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Wipe cabinet fronts", time: "6-15 min" },
+        { text: "Wash shower curtain & liner", time: "31 min - 1 hr" },
+        { text: "Declutter expired or unused products", time: "6-15 min" },
+      ],
+      Annually: [
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "laundry", name: "Laundry Room", icon: "\uD83D\uDC55", tasks: {
-      Daily: ["Move laundry along (wash, dry, fold, put away)"],
-      Weekly: ["Wipe down washer & dryer exterior","Mop floor","Wipe surfaces"],
+      Daily: [
+        { text: "Move laundry along (wash, dry, fold, put away)", time: "16-30 min" },
+      ],
+      Weekly: [
+        { text: "Wipe down washer & dryer exterior", time: "6-15 min" },
+        { text: "Mop floor", time: "6-15 min" },
+        { text: "Wipe surfaces", time: "0-5 min" },
+      ],
       Monthly: [],
-      Quarterly: ["Wipe baseboards & light switches","Deep clean dryer vent duct","Declutter laundry supplies","Check hoses for leaks or wear"],
-      Annually: ["Wipe walls"] }},
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Deep clean dryer vent duct", time: "31 min - 1 hr" },
+        { text: "Declutter laundry supplies", time: "6-15 min" },
+        { text: "Check hoses for leaks or wear", time: "6-15 min" },
+      ],
+      Annually: [
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
     { id: "loft", name: "Loft / Hallway", icon: "\uD83D\uDEB6", tasks: {
-      Daily: ["Clear any items left in hallway"],
-      Weekly: ["Sweep or vacuum floor"],
-      Monthly: ["Dust furniture & decor"],
-      Quarterly: ["Wipe baseboards & light switches","Declutter any stored items"],
-      Annually: ["Deep clean carpet & stairs","Wipe walls"] }},
+      Daily: [
+        { text: "Clear any items left in hallway", time: "0-5 min" },
+      ],
+      Weekly: [
+        { text: "Sweep or vacuum floor", time: "6-15 min" },
+      ],
+      Monthly: [
+        { text: "Dust furniture & decor", time: "6-15 min" },
+      ],
+      Quarterly: [
+        { text: "Wipe baseboards & light switches", time: "16-30 min" },
+        { text: "Declutter any stored items", time: "16-30 min" },
+      ],
+      Annually: [
+        { text: "Deep clean carpet & stairs", time: "1-2 hrs" },
+        { text: "Wipe walls", time: "31 min - 1 hr" },
+      ] }},
   ]},
   { id: "yard", label: "Yard", color: "#5A9E4B", icon: "\uD83C\uDF3F", rooms: [
     { id: "yard-main", name: "Yard (Apr - Oct)", icon: "\uD83C\uDF3F", tasks: {
       Daily: [],
-      Weekly: ["Clean up dog poop","Mow & trim grass","Weed garden","Spray weeds"],
+      Weekly: [
+        { text: "Clean up dog poop", time: "6-15 min" },
+        { text: "Mow & trim grass", time: "31 min - 1 hr" },
+        { text: "Weed garden", time: "16-30 min" },
+        { text: "Spray weeds", time: "6-15 min" },
+      ],
       Monthly: [], Quarterly: [], Annually: [] }},
   ]},
 ];
@@ -484,7 +801,9 @@ export default function CleaningSchedule() {
   function getTaskList(roomId, freq) {
     if (customTasks[roomId]?.[freq] !== undefined) return customTasks[roomId][freq];
     const room = allRooms.find(r => r.id === roomId);
-    return (room?.tasks[freq] || []).map(text => ({ text, assignees: [], time: "" }));
+    return (room?.tasks[freq] || []).map(t =>
+      typeof t === "string" ? { text: t, assignees: [], time: "" } : { assignees: [], time: "", ...t }
+    );
   }
 
   function getVisibleTasks(roomId, freq) {
@@ -1243,7 +1562,16 @@ export default function CleaningSchedule() {
               </div>
 
               <label style={lbSt}>Estimated Time</label>
-              <input value={newTaskTime} onChange={e=>setNewTaskTime(e.target.value)} placeholder="e.g. 5 min, 15 min, 1 hr" style={{ ...inputSt, marginBottom:12 }} />
+              <select value={newTaskTime} onChange={e=>setNewTaskTime(e.target.value)} style={{ ...inputSt, marginBottom:12, appearance:"none", backgroundImage:"url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E\")", backgroundRepeat:"no-repeat", backgroundPosition:"right 10px center", paddingRight:30 }}>
+                <option value="">-- Select time --</option>
+                <option value="0-5 min">0–5 minutes</option>
+                <option value="6-15 min">6–15 minutes</option>
+                <option value="16-30 min">16–30 minutes</option>
+                <option value="31 min - 1 hr">31 minutes – 1 hour</option>
+                <option value="1-2 hrs">1–2 hours</option>
+                <option value="2-4 hrs">2–4 hours</option>
+                <option value="4+ hrs">More than 4 hours</option>
+              </select>
 
               <div style={{ display:"flex", gap:6 }}>
                 <button onClick={onSave} style={{ flex:1, padding:"8px", background:"#1A1A1A", color:"#fff", border:"none", borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:"bold" }}>Save</button>
