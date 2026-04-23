@@ -799,7 +799,17 @@ export default function CleaningSchedule() {
   }
 
   function getTaskList(roomId, freq) {
-    if (customTasks[roomId]?.[freq] !== undefined) return customTasks[roomId][freq];
+    if (customTasks[roomId]?.[freq] !== undefined) {
+      // Guard against corrupted entries where task.text is itself an object
+      return customTasks[roomId][freq].map(t => {
+        if (!t || typeof t !== "object") return { text: String(t || ""), assignees: [], time: "" };
+        // If text field is itself an object (from old bug), extract it
+        if (typeof t.text === "object" && t.text !== null) {
+          return { assignees: [], time: "", ...t.text, assignees: t.assignees || [], time: t.time || t.text.time || "" };
+        }
+        return { assignees: [], time: "", ...t };
+      }).filter(t => t.text && typeof t.text === "string" && t.text.trim() !== "");
+    }
     const room = allRooms.find(r => r.id === roomId);
     return (room?.tasks[freq] || []).map(t =>
       typeof t === "string" ? { text: t, assignees: [], time: "" } : { assignees: [], time: "", ...t }
@@ -815,7 +825,9 @@ export default function CleaningSchedule() {
   function ensureSnapshot(roomId, freq, prev) {
     if (prev[roomId]?.[freq] !== undefined) return prev;
     const room = allRooms.find(r => r.id === roomId);
-    const base = (room?.tasks[freq] || []).map(text => ({ text, assignees: [], time: "" }));
+    const base = (room?.tasks[freq] || []).map(t =>
+      typeof t === "string" ? { text: t, assignees: [], time: "" } : { assignees: [], time: "", ...t }
+    );
     return { ...prev, [roomId]: { ...(prev[roomId] || {}), [freq]: base } };
   }
 
@@ -863,7 +875,32 @@ export default function CleaningSchedule() {
   useEffect(() => {
     const unsub = dbListen("customTasks", (result) => {
       if (writingRef.current) return;
-      if (result?.value) setCustomTasks(JSON.parse(result.value));
+      if (result?.value) {
+        const raw = JSON.parse(result.value);
+        // Sanitize: fix any corrupted task entries where task.text is an object
+        let dirty = false;
+        const cleaned = {};
+        Object.entries(raw).forEach(([roomId, freqMap]) => {
+          cleaned[roomId] = {};
+          Object.entries(freqMap).forEach(([freq, tasks]) => {
+            cleaned[roomId][freq] = (tasks || []).map(t => {
+              if (!t || typeof t !== "object") { dirty = true; return null; }
+              if (typeof t.text === "object" && t.text !== null) {
+                dirty = true;
+                return { text: t.text.text || "", assignees: t.assignees || [], time: t.time || t.text.time || "" };
+              }
+              return t;
+            }).filter(t => t && typeof t.text === "string" && t.text.trim() !== "");
+          });
+        });
+        setCustomTasks(cleaned);
+        if (dirty) {
+          writingRef.current = true;
+          dbSet("customTasks", JSON.stringify(cleaned)).then(() => {
+            setTimeout(() => { writingRef.current = false; }, 500);
+          });
+        }
+      }
     });
     return () => unsub();
   }, []);
@@ -1020,6 +1057,7 @@ export default function CleaningSchedule() {
 
   // Render a task row
   function TaskRow({ task, roomId, freq, allTasks, isLast, fmr }) {
+    if (!task || typeof task.text !== "string") return null;
     const fi = allTasks.findIndex(ft => ft.text === task.text);
     const key = roomId+"-"+freq+"-"+fi;
     const completion = getCompletion(key);
