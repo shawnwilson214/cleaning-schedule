@@ -777,6 +777,9 @@ export default function CleaningSchedule() {
   const [activeRoom, setActiveRoom] = useState(levels[0].rooms[0]);
   const [editLevel, setEditLevel] = useState(levels[0]);
   const [editRoom, setEditRoom] = useState(levels[0].rooms[0]);
+  const [editSubMode, setEditSubMode] = useState("tasks");
+  const [editTaskLayout, setEditTaskLayout] = useState("room");
+  const [backdateSelectedDay, setBackdateSelectedDay] = useState(new Date().toDateString());
   const [customTasks, setCustomTasks] = useState({});
   const [editingTask, setEditingTask] = useState(null);
   const [newTaskText, setNewTaskText] = useState("");
@@ -801,6 +804,8 @@ export default function CleaningSchedule() {
   const [expandedLeaderMonth, setExpandedLeaderMonth] = useState(null);
   const [allowanceData, setAllowanceData] = useState({});  // { memberId: { balance, history: [{amount, date, note}] } }
   const [allowanceLoaded, setAllowanceLoaded] = useState(false);
+  const [adjAmounts, setAdjAmounts] = useState({});
+  const [adjNotes, setAdjNotes] = useState({});
 
   const writingRef = useRef(false);
   const isKidMode = activeMember.isKid;
@@ -1186,7 +1191,7 @@ export default function CleaningSchedule() {
   );
 
   const tabs = isKidMode
-    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["history","History"]]
+    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["allowance","Allowance"]]
     : [["tasks","Tasks"],["status","Status"],["leaderboard","Leaderboard"],["allowance","Allowance"],["history","History"],["edit","Edit"]];
 
   return (
@@ -1210,9 +1215,9 @@ export default function CleaningSchedule() {
       </div>
 
       {/* TABS */}
-      <div style={{ display: "flex", background: "#111", borderTop: "1px solid #2A2A2A" }}>
+      <div style={{ display: "flex", background: "#111", borderTop: "1px solid #2A2A2A", overflowX: "auto" }}>
         {tabs.map(([v,label]) => (
-          <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "10px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: view===v?"#F5F2EC":"#555", borderBottom: view===v?"2px solid #F5F2EC":"2px solid transparent", textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</button>
+          <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "9px 4px", cursor: "pointer", fontFamily: "inherit", fontSize: 10, color: view===v?"#F5F2EC":"#555", borderBottom: view===v?"2px solid #F5F2EC":"2px solid transparent", textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap", minWidth: 0 }}>{label}</button>
         ))}
       </div>
 
@@ -1230,27 +1235,37 @@ export default function CleaningSchedule() {
         const weekLabel = weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric",year:"numeric"});
         const monthLabel = now.toLocaleDateString([],{month:"long",year:"numeric"});
 
+        function parseCompletionKey(key, c) {
+          // Keys: roomId-freq-index  or  roomId-freq-index-memberId
+          // roomId and freq can both contain hyphens so we must use c.freq to split
+          const room = allRooms.find(r => key.startsWith(r.id + "-"));
+          if (!room) return null;
+          const rest = key.slice(room.id.length + 1); // "freq-index" or "freq-index-memberId"
+          if (!c.freq || !rest.startsWith(c.freq + "-")) return null;
+          const afterFreq = rest.slice(c.freq.length + 1); // "index" or "index-memberId"
+          const taskIndex = parseInt(afterFreq.split("-")[0]);
+          if (isNaN(taskIndex)) return null;
+          return { room, taskIndex };
+        }
+
         function countPoints(from, to) {
           const points = {}, details = {};
           kids.forEach(k => { points[k.id] = 0; details[k.id] = []; });
           function scan(obj) {
             Object.entries(obj).forEach(([key, c]) => {
-              if (!c || !c.at || !c.by) return;
+              if (!c || !c.at || !c.by || !c.freq) return;
               if (!kids.find(k => k.id === c.by)) return;
               if (c.at < from || c.at > to) return;
-              const room = allRooms.find(r => key.startsWith(r.id+"-"));
-              if (!room) return;
-              const afterRoom = key.slice(room.id.length+1);
-              const afterFreq = afterRoom.slice((c.freq||"").length+1);
-              const taskIndex = parseInt(afterFreq.split("-")[0]);
-              if (isNaN(taskIndex)) return;
+              const parsed = parseCompletionKey(key, c);
+              if (!parsed) return;
+              const { room, taskIndex } = parsed;
               const taskList = getTaskList(room.id, c.freq);
               const taskObj = taskList[taskIndex];
               if (!taskObj) return;
               const pts = taskPoints(taskObj);
-              const baseKey = room.id+"-"+c.freq+"-"+taskIndex;
+              const baseKey = room.id + "-" + c.freq + "-" + taskIndex;
               if (details[c.by].find(d => d.baseKey === baseKey)) return;
-              points[c.by] = (points[c.by]||0) + pts;
+              points[c.by] = (points[c.by] || 0) + pts;
               details[c.by].push({ baseKey, task: taskObj.text, room: room.name, roomIcon: room.icon, freq: c.freq, pts, time: taskObj.time, at: c.at });
             });
           }
@@ -1279,15 +1294,12 @@ export default function CleaningSchedule() {
         kids.forEach(k => { dailyPts[k.id] = Array(7).fill(0); });
         function scanDaily(obj) {
           Object.entries(obj).forEach(([key, c]) => {
-            if (!c || !c.at || !c.by) return;
+            if (!c || !c.at || !c.by || !c.freq) return;
             if (!kids.find(k=>k.id===c.by)) return;
             if (c.at < weekStart.getTime() || c.at > weekEnd.getTime()) return;
-            const room = allRooms.find(r=>key.startsWith(r.id+"-"));
-            if (!room) return;
-            const afterRoom = key.slice(room.id.length+1);
-            const afterFreq = afterRoom.slice((c.freq||"").length+1);
-            const taskIndex = parseInt(afterFreq.split("-")[0]);
-            if (isNaN(taskIndex)) return;
+            const parsed = parseCompletionKey(key, c);
+            if (!parsed) return;
+            const { room, taskIndex } = parsed;
             const taskList = getTaskList(room.id, c.freq);
             const taskObj = taskList[taskIndex];
             if (!taskObj) return;
@@ -1472,7 +1484,7 @@ export default function CleaningSchedule() {
         const allowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
 
         function handlePayout(kid) {
-          const current = allowanceData[kid.id] || { balance: 0, history: [] };
+          const current = allowanceData[kid.id] || { balance: 0, history: [], payoutHistory: [] };
           const amount = current.balance || 0;
           if (amount <= 0) return;
           const updated = {
@@ -1480,11 +1492,11 @@ export default function CleaningSchedule() {
             [kid.id]: {
               balance: 0,
               lastAwardedDay: current.lastAwardedDay,
-              history: [...(current.history || []), {
-                type: "payout",
-                amount,
-                date: Date.now(),
-                note: "Payout to " + kid.name,
+              history: [],  // reset current-cycle history on payout
+              payoutHistory: [...(current.payoutHistory || []), {
+                type: "payout", amount, date: Date.now(),
+                note: "Paid out to " + kid.name,
+                cycleHistory: current.history || [],
               }],
             }
           };
@@ -1492,79 +1504,151 @@ export default function CleaningSchedule() {
           saveAllowance(updated);
         }
 
+        function handleAdjust(kid, isAdd) {
+          const adjAmt = parseFloat(adjAmounts[kid.id] || "0");
+          const adjNote = adjNotes[kid.id] || "";
+          if (isNaN(adjAmt) || adjAmt <= 0) return;
+          const current = allowanceData[kid.id] || { balance: 0, history: [] };
+          const delta = isAdd ? adjAmt : -adjAmt;
+          const updated = {
+            ...allowanceData,
+            [kid.id]: {
+              ...current,
+              balance: Math.max(0, (current.balance || 0) + delta),
+              history: [...(current.history || []), {
+                type: isAdd ? "add" : "deduct",
+                amount: adjAmt,
+                date: Date.now(),
+                note: adjNote || (isAdd ? "Manual addition" : "Manual deduction"),
+              }],
+            }
+          };
+          setAllowanceData(updated);
+          saveAllowance(updated);
+          setAdjAmounts(prev => ({ ...prev, [kid.id]: "" }));
+          setAdjNotes(prev => ({ ...prev, [kid.id]: "" }));
+        }
+
+        const inSt = { fontSize: 13, padding: "7px 10px", border: "1px solid #DDD8CE", borderRadius: 8, fontFamily: "inherit", background: "#fff", boxSizing: "border-box" };
+
         return (
           <div style={{ paddingBottom: 60 }}>
-            <div style={{ padding: "14px 14px 0" }}>
-              <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>Allowance Tracker</p>
-              <p style={{ margin: "0 0 16px", fontSize: 11, color: "#AAA" }}>Zach & Kyle each earn $2 when all their daily tasks are completed. Tap Payout to reset their balance.</p>
+            <div style={{ padding: "14px 14px 8px" }}>
+              <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>Allowance Tracker</p>
+              <p style={{ margin: 0, fontSize: 11, color: "#AAA" }}>$2 earned when all daily tasks are completed.</p>
             </div>
 
-            {/* Balance cards */}
-            <div style={{ padding: "0 14px", display: "flex", gap: 10, marginBottom: 20 }}>
-              {allowanceKids.map(kid => {
-                const data = allowanceData[kid.id] || { balance: 0, history: [] };
-                const balance = data.balance || 0;
-                const payouts = (data.history || []).filter(h => h.type === "payout");
-                const lastPayout = payouts.length > 0 ? payouts[payouts.length - 1] : null;
-                return (
-                  <div key={kid.id} style={{ flex: 1, background: "#fff", borderRadius: 14, border: "2px solid " + kid.color + "55", overflow: "hidden" }}>
-                    <div style={{ padding: "14px", background: kid.color + "12" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            {allowanceKids.map(kid => {
+              const data = allowanceData[kid.id] || { balance: 0, history: [], payoutHistory: [] };
+              const balance = data.balance || 0;
+              const history = data.history || [];
+              const payoutHistory = data.payoutHistory || [];
+              const lastPayout = payoutHistory.length > 0 ? payoutHistory[payoutHistory.length - 1] : null;
+
+              return (
+                <div key={kid.id} style={{ margin: "0 14px 18px", background: "#fff", borderRadius: 14, border: "2px solid " + kid.color + "55", overflow: "hidden" }}>
+                  {/* Header */}
+                  <div style={{ padding: "14px 14px 10px", background: kid.color + "12", borderBottom: "1px solid " + kid.color + "22" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <Avatar member={kid} size={30} fontSize={13} />
                         <span style={{ fontSize: 14, fontWeight: "bold", color: kid.color }}>{kid.name}</span>
                       </div>
-                      <p style={{ margin: 0, fontSize: 32, fontWeight: "bold", color: kid.color, lineHeight: 1 }}>${balance.toFixed(2)}</p>
-                      <p style={{ margin: "4px 0 0", fontSize: 10, color: "#AAA" }}>current balance</p>
+                      <div style={{ textAlign: "right" }}>
+                        <p style={{ margin: 0, fontSize: 30, fontWeight: "bold", color: kid.color, lineHeight: 1 }}>${balance.toFixed(2)}</p>
+                        <p style={{ margin: "2px 0 0", fontSize: 9, color: "#AAA" }}>current balance</p>
+                      </div>
                     </div>
-                    <div style={{ padding: "10px 14px 12px" }}>
-                      {lastPayout && (
-                        <p style={{ margin: "0 0 10px", fontSize: 10, color: "#AAA" }}>
-                          Last paid ${lastPayout.amount.toFixed(2)} on {new Date(lastPayout.date).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
-                        </p>
-                      )}
-                      <button
-                        onClick={() => handlePayout(kid)}
-                        disabled={balance <= 0}
-                        style={{ width: "100%", padding: "8px", background: balance > 0 ? kid.color : "#EEE", color: balance > 0 ? "#fff" : "#BBB", border: "none", borderRadius: 8, cursor: balance > 0 ? "pointer" : "not-allowed", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}
-                      >
-                        {balance > 0 ? "Pay Out $" + balance.toFixed(2) : "Nothing to pay"}
-                      </button>
-                    </div>
+                    {lastPayout && (
+                      <p style={{ margin: "8px 0 0", fontSize: 10, color: "#AAA" }}>
+                        Last paid ${lastPayout.amount.toFixed(2)} on {new Date(lastPayout.date).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                      </p>
+                    )}
                   </div>
-                );
-              })}
-            </div>
 
-            {/* History per kid */}
-            {allowanceKids.map(kid => {
-              const data = allowanceData[kid.id] || { balance: 0, history: [] };
-              const history = [...(data.history || [])].reverse();
-              if (history.length === 0) return null;
-              return (
-                <div key={kid.id} style={{ margin: "0 14px 16px" }}>
-                  <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: "bold", color: kid.color, textTransform: "uppercase", letterSpacing: "0.06em" }}>{kid.name}'s History</p>
-                  <div style={{ background: "#fff", borderRadius: 12, border: "1px solid " + kid.color + "33", overflow: "hidden" }}>
-                    {history.map((entry, i) => {
-                      const isPayout = entry.type === "payout";
-                      return (
-                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: i < history.length - 1 ? "1px solid #F5F2EC" : "none" }}>
-                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: isPayout ? "#D47F6B22" : kid.color + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                            <span style={{ fontSize: 13 }}>{isPayout ? "💸" : "✅"}</span>
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{entry.note}</p>
-                            <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(entry.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}</p>
-                          </div>
-                          <span style={{ fontSize: 13, fontWeight: "bold", color: isPayout ? "#D47F6B" : kid.color, flexShrink: 0 }}>
-                            {isPayout ? "-" : "+"}${entry.amount.toFixed(2)}
-                          </span>
-                        </div>
-                      );
-                    })}
+                  {/* Payout button */}
+                  <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
+                    <button onClick={() => handlePayout(kid)} disabled={balance <= 0} style={{ width: "100%", padding: "9px", background: balance > 0 ? kid.color : "#EEE", color: balance > 0 ? "#fff" : "#BBB", border: "none", borderRadius: 8, cursor: balance > 0 ? "pointer" : "not-allowed", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>
+                      {balance > 0 ? "💸  Pay Out $" + balance.toFixed(2) : "Nothing to pay out"}
+                    </button>
                   </div>
+
+                  {/* Manual adjustment */}
+                  <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
+                    <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>Manual Adjustment</p>
+                    <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                      <input
+                        type="number" min="0" step="0.50"
+                        value={adjAmounts[kid.id] || ""}
+                        onChange={e => setAdjAmounts(prev => ({ ...prev, [kid.id]: e.target.value }))}
+                        placeholder="$0.00"
+                        style={{ ...inSt, width: 80 }}
+                      />
+                      <input
+                        value={adjNotes[kid.id] || ""}
+                        onChange={e => setAdjNotes(prev => ({ ...prev, [kid.id]: e.target.value }))}
+                        placeholder="Reason (optional)"
+                        style={{ ...inSt, flex: 1 }}
+                      />
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => handleAdjust(kid, true)} style={{ flex: 1, padding: "7px", background: "#6DB894", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>+ Add</button>
+                      <button onClick={() => handleAdjust(kid, false)} style={{ flex: 1, padding: "7px", background: "#D47F6B", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>− Deduct</button>
+                    </div>
+                  </div>
+
+                  {/* Current cycle history */}
+                  {history.length > 0 && (
+                    <div>
+                      <p style={{ margin: 0, padding: "8px 14px 4px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>This Cycle</p>
+                      {[...history].reverse().map((entry, i) => {
+                        const isEarn = entry.type === "earn";
+                        const isAdd = entry.type === "add";
+                        const isDeduct = entry.type === "deduct";
+                        const color = isDeduct ? "#D47F6B" : isEarn ? kid.color : "#6DB894";
+                        const icon = isDeduct ? "−" : "+";
+                        return (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderTop: "1px solid #F5F2EC" }}>
+                            <div style={{ width: 26, height: 26, borderRadius: "50%", background: color + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                              <span style={{ fontSize: 12 }}>{isDeduct ? "📉" : isEarn ? "✅" : "📈"}</span>
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{entry.note}</p>
+                              <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(entry.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
+                            </div>
+                            <span style={{ fontSize: 13, fontWeight: "bold", color, flexShrink: 0 }}>{icon}${entry.amount.toFixed(2)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {history.length === 0 && (
+                    <p style={{ margin: 0, padding: "12px 14px", fontSize: 12, color: "#CCC", fontStyle: "italic" }}>No activity this cycle yet.</p>
+                  )}
                 </div>
               );
             })}
+
+            {/* Payout history */}
+            {allowanceKids.some(k => (allowanceData[k.id]?.payoutHistory || []).length > 0) && (
+              <div style={{ padding: "0 14px" }}>
+                <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: "bold", color: "#888", textTransform: "uppercase", letterSpacing: "0.06em" }}>Payout History</p>
+                <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E4E0D8", overflow: "hidden" }}>
+                  {allowanceKids.flatMap(kid =>
+                    (allowanceData[kid.id]?.payoutHistory || []).map(p => ({ ...p, kid }))
+                  ).sort((a,b) => b.date - a.date).map((p, i, arr) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: i < arr.length-1 ? "1px solid #F5F2EC" : "none" }}>
+                      <Avatar member={p.kid} size={24} fontSize={11} />
+                      <div style={{ flex: 1 }}>
+                        <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{p.kid.name} — ${p.amount.toFixed(2)}</p>
+                        <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(p.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
+                      </div>
+                      <span style={{ fontSize: 13, fontWeight: "bold", color: "#D47F6B" }}>-${p.amount.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -1810,6 +1894,47 @@ export default function CleaningSchedule() {
         const inputSt = { width:"100%", fontSize:13, padding:"6px 8px", border:"1px solid #DDD8CE", borderRadius:6, fontFamily:"inherit", boxSizing:"border-box", background:"#fff" };
         const lbSt = { fontSize:10, color:"#888", textTransform:"uppercase", letterSpacing:"0.06em", display:"block", marginBottom:3 };
 
+        // ── Backdate completion picker ───────────────────────────────────────
+        // Build list of past 7 days for daily tasks
+        function getPastDays(n) {
+          const days = [];
+          for (let i = 0; i < n; i++) {
+            const d = new Date(); d.setDate(d.getDate() - i); d.setHours(12,0,0,0);
+            days.push(d);
+          }
+          return days;
+        }
+        const pastDays = getPastDays(7);
+
+        function backdateToggle(roomId, freq, taskIndex, memberId, dateTs) {
+          const key = roomId + "-" + freq + "-" + taskIndex;
+          const personalKey = memberId ? key + "-" + memberId : key;
+          setCompletions(prev => {
+            const next = { ...prev };
+            if (next[personalKey]) {
+              delete next[personalKey];
+            } else {
+              const member = FAMILY.find(f => f.id === memberId) || activeMember;
+              next[personalKey] = { by: member.id, name: member.name, color: member.color, at: dateTs, freq, periodKey: getPeriodKey(freq, new Date(dateTs)), baseKey: key };
+            }
+            saveCompletions(next);
+            return next;
+          });
+        }
+
+        function isCompletedOn(roomId, freq, taskIndex, dateTs) {
+          // Check if any completion for this task falls on the given date
+          const dateStr = new Date(dateTs).toDateString();
+          const key = roomId + "-" + freq + "-" + taskIndex;
+          for (const [k, c] of Object.entries(completions)) {
+            if (!c || !c.at) continue;
+            if (!k.startsWith(key)) continue;
+            if (new Date(c.at).toDateString() === dateStr) return { key: k, c };
+          }
+          return null;
+        }
+
+        // Edit form component
         function EditForm({ onSave, onCancel, fmr }) {
           return (
             <div style={{ padding:"12px", background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10, marginBottom:8 }}>
@@ -1856,101 +1981,242 @@ export default function CleaningSchedule() {
 
         return (
           <div style={{ paddingBottom: 60 }}>
-            <div style={{ display:"flex", background:"#ECEAE3", borderBottom:"1px solid #DDD8CE" }}>
-              {levels.map(lv => (
-                <button key={lv.id} onClick={() => { setEditLevel(lv); setEditRoom(lv.rooms[0]); setShowAddTask(false); setEditingTask(null); }} style={{ flex:1, background:editLevel.id===lv.id?lv.color+"18":"none", border:"none", padding:"12px 4px 10px", cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:editLevel.id===lv.id?"bold":"normal", color:editLevel.id===lv.id?lv.color:"#999", borderBottom:editLevel.id===lv.id?"3px solid "+lv.color:"3px solid transparent", textTransform:"uppercase" }}>
-                  <div style={{ fontSize:16, marginBottom:3 }}>{lv.icon}</div>{lv.label}
-                </button>
-              ))}
+            {/* Edit sub-mode toggle */}
+            <div style={{ display:"flex", justifyContent:"center", padding:"10px 16px 0", background:"#F5F2EC" }}>
+              <div style={{ display:"flex", background:"#ECEAE3", borderRadius:20, padding:3, gap:2 }}>
+                {[["tasks","Edit Tasks"],["backdate","Back-Date"]].map(([v,lbl]) => (
+                  <button key={v} onClick={() => setEditSubMode(v)} style={{ padding:"5px 14px", borderRadius:16, border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:editSubMode===v?"bold":"normal", background:editSubMode===v?"#1A1A1A":"transparent", color:editSubMode===v?"#F5F2EC":"#888" }}>{lbl}</button>
+                ))}
+              </div>
             </div>
 
-            <div style={{ padding:"10px 12px 0", display:"flex", gap:6, overflowX:"auto" }}>
-              {editLevel.rooms.map(room => (
-                <button key={room.id} onClick={() => { setEditRoom(room); setShowAddTask(false); setEditingTask(null); }} style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 12px", borderRadius:16, border:"1px solid "+(editRoom.id===room.id?editLevel.color:"#DDD8CE"), background:editRoom.id===room.id?editLevel.color:"#fff", color:editRoom.id===room.id?"#fff":"#555", cursor:"pointer", fontFamily:"inherit", fontSize:11, whiteSpace:"nowrap", flexShrink:0 }}>
-                  <RoomIcon icon={room.icon} size={13} /><span>{room.name}</span>
-                </button>
-              ))}
-            </div>
+            {/* ── TASK EDIT MODE ── */}
+            {editSubMode === "tasks" && (<>
+              {/* Task layout toggle */}
+              <div style={{ display:"flex", justifyContent:"center", padding:"8px 16px 0" }}>
+                <div style={{ display:"flex", background:"#ECEAE3", borderRadius:20, padding:3, gap:2 }}>
+                  {[["frequency","By Frequency"],["room","By Room"]].map(([v,lbl]) => (
+                    <button key={v} onClick={() => setEditTaskLayout(v)} style={{ padding:"5px 14px", borderRadius:16, border:"none", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:editTaskLayout===v?"bold":"normal", background:editTaskLayout===v?"#1A1A1A":"transparent", color:editTaskLayout===v?"#F5F2EC":"#888" }}>{lbl}</button>
+                  ))}
+                </div>
+              </div>
 
-            <div style={{ padding:"12px 12px 0" }}>
-              {frequencies.map(freq => {
-                const tasks = getTaskList(editRoom.id, freq);
-                const fmr = freqMeta[freq];
-                return (
-                  <div key={freq} style={{ marginBottom:16 }}>
-                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                        <div style={{ width:8, height:8, borderRadius:"50%", background:fmr.dot }} />
-                        <span style={{ fontSize:11, fontWeight:"bold", color:fmr.text, textTransform:"uppercase" }}>{freq}</span>
-                        <span style={{ fontSize:10, color:"#BBB" }}>({tasks.length})</span>
-                      </div>
-                      <button onClick={() => { setShowAddTask(true); setNewTaskFreq(freq); setNewTaskEditFreq(freq); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); setEditingTask(null); }} style={{ fontSize:11, color:fmr.text, background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit" }}>+ Add</button>
-                    </div>
-
-                    {showAddTask && newTaskFreq===freq && editingTask===null && (
-                      <EditForm
-                        fmr={fmr}
-                        onSave={() => {
-                          if (!newTaskText.trim()) return;
-                          const tgt = newTaskEditFreq;
-                          const updated = (prev => {
-                            const snap = ensureSnapshot(editRoom.id, tgt, prev);
-                            return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [tgt]: [...snap[editRoom.id][tgt], { text: newTaskText.trim(), assignees: newTaskAssignees, time: newTaskTime.trim() }] } };
-                          })(customTasks);
-                          setCustomTasks(updated); saveCustomTasks(updated);
-                          setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
-                        }}
-                        onCancel={() => { setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
-                      />
-                    )}
-
-                    {tasks.length===0 && !(showAddTask && newTaskFreq===freq) && (
-                      <p style={{ fontSize:12, color:"#CCC", fontStyle:"italic", margin:"0 0 4px" }}>No {freq.toLowerCase()} tasks</p>
-                    )}
-
-                    {tasks.map((task, i) => (
-                      <div key={i} style={{ marginBottom:5 }}>
-                        {editingTask?.roomId===editRoom.id && editingTask?.freq===freq && editingTask?.index===i ? (
-                          <EditForm
-                            fmr={fmr}
-                            onSave={() => {
-                              if (!newTaskText.trim()) return;
-                              const tgt = newTaskEditFreq;
-                              let updated = (prev => {
-                                const snap = ensureSnapshot(editRoom.id, freq, prev);
-                                return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: snap[editRoom.id][freq].filter((_,idx) => idx !== i) } };
-                              })(customTasks);
-                              updated = (prev => {
-                                const snap = ensureSnapshot(editRoom.id, tgt, prev);
-                                return { ...snap, [editRoom.id]: { ...snap[editRoom.id], [tgt]: [...snap[editRoom.id][tgt], { text: newTaskText.trim(), assignees: newTaskAssignees, time: newTaskTime.trim() }] } };
-                              })(updated);
-                              setCustomTasks(updated); saveCustomTasks(updated);
-                              setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
-                            }}
-                            onCancel={() => { setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
-                          />
-                        ) : (
-                          <div style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"9px 12px", background:"#fff", border:"1px solid #E4E0D8", borderRadius:10 }}>
-                            <div style={{ flex:1, minWidth:0 }}>
-                              <p style={{ margin:0, fontSize:13, color:"#1A1A1A" }}>{task.text}</p>
-                              <div style={{ display:"flex", gap:6, marginTop:4, flexWrap:"wrap", alignItems:"center" }}>
-                                {task.assignees?.length > 0 && task.assignees.map(aid => { const m=FAMILY.find(f=>f.id===aid); return m?<Avatar key={aid} member={m} size={16} fontSize={8} />:null; })}
-                                {task.time && <span style={{ fontSize:10, color:"#AAA", background:"#F5F2EC", padding:"1px 6px", borderRadius:6 }}>~{task.time}</span>}
-                              </div>
-                            </div>
-                            <button onClick={() => { setEditingTask({roomId:editRoom.id,freq,index:i}); setNewTaskText(task.text); setNewTaskAssignees(task.assignees||[]); setNewTaskTime(task.time||""); setNewTaskEditFreq(freq); setShowAddTask(false); }} style={{ fontSize:11, color:"#AAA", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Edit</button>
-                            <button onClick={() => { const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }} style={{ fontSize:11, color:"#D47F6B", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Delete</button>
+              {/* BY FREQUENCY */}
+              {editTaskLayout === "frequency" && (
+                <div style={{ padding:"10px 12px 0" }}>
+                  {frequencies.map(freq => {
+                    // Collect all rooms that have tasks for this freq
+                    const roomsWithTasks = allRooms.filter(room => getTaskList(room.id, freq).length > 0);
+                    const fmr = freqMeta[freq];
+                    const totalTasks = roomsWithTasks.reduce((s, r) => s + getTaskList(r.id, freq).length, 0);
+                    const colKey = "editfreq-" + freq;
+                    const isOpen = !collapsed[colKey];
+                    return (
+                      <div key={freq} style={{ marginBottom:12 }}>
+                        <div onClick={() => toggleRoom(colKey)} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 10px", background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10, cursor:"pointer", marginBottom:isOpen?0:0 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                            <div style={{ width:8, height:8, borderRadius:"50%", background:fmr.dot }} />
+                            <span style={{ fontSize:12, fontWeight:"bold", color:fmr.text, textTransform:"uppercase" }}>{freq}</span>
+                            <span style={{ fontSize:10, color:"#BBB" }}>({totalTasks} tasks)</span>
+                          </div>
+                          <span style={{ fontSize:10, color:fmr.text }}>{isOpen?"▲":"▼"}</span>
+                        </div>
+                        {isOpen && (
+                          <div style={{ border:"1px solid "+fmr.border, borderTop:"none", borderRadius:"0 0 10px 10px", overflow:"hidden" }}>
+                            {roomsWithTasks.map((room, ri) => {
+                              const tasks = getTaskList(room.id, freq);
+                              const level = levels.find(l => l.rooms.some(r => r.id === room.id));
+                              return (
+                                <div key={room.id} style={{ borderTop: ri > 0 ? "1px solid "+fmr.border : "none" }}>
+                                  <div style={{ padding:"6px 12px", background:fmr.lightBg, display:"flex", alignItems:"center", gap:6 }}>
+                                    <RoomIcon icon={room.icon} size={13} />
+                                    <span style={{ fontSize:11, fontWeight:"bold", color:"#555" }}>{room.name}</span>
+                                    {level && <span style={{ fontSize:9, color:level.color, fontWeight:"bold" }}>{level.label}</span>}
+                                  </div>
+                                  {tasks.map((task, i) => (
+                                    <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 12px", borderTop:"1px solid "+fmr.border+"66", background:"#fff" }}>
+                                      <div style={{ flex:1, minWidth:0 }}>
+                                        <p style={{ margin:0, fontSize:12, color:"#1A1A1A" }}>{task.text}</p>
+                                        <div style={{ display:"flex", gap:5, marginTop:3, flexWrap:"wrap", alignItems:"center" }}>
+                                          {task.assignees?.length > 0 && task.assignees.map(aid => { const m=FAMILY.find(f=>f.id===aid); return m?<Avatar key={aid} member={m} size={14} fontSize={7} />:null; })}
+                                          {task.time && <span style={{ fontSize:9, color:"#AAA", background:"#F5F2EC", padding:"1px 5px", borderRadius:5 }}>~{task.time}</span>}
+                                        </div>
+                                      </div>
+                                      <button onClick={() => { setEditRoom(room); setEditLevel(level||levels[0]); setEditingTask({roomId:room.id,freq,index:i}); setNewTaskText(task.text); setNewTaskAssignees(task.assignees||[]); setNewTaskTime(task.time||""); setNewTaskEditFreq(freq); setShowAddTask(false); setEditTaskLayout("room"); }} style={{ fontSize:10, color:"#AAA", background:"none", border:"none", cursor:"pointer", padding:"3px 5px", flexShrink:0 }}>Edit</button>
+                                      <button onClick={() => { const updated=(prev=>{ const snap=ensureSnapshot(room.id,freq,prev); return {...snap,[room.id]:{...snap[room.id],[freq]:snap[room.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }} style={{ fontSize:10, color:"#D47F6B", background:"none", border:"none", cursor:"pointer", padding:"3px 5px", flexShrink:0 }}>Del</button>
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* BY ROOM */}
+              {editTaskLayout === "room" && (<>
+                <div style={{ display:"flex", background:"#ECEAE3", borderBottom:"1px solid #DDD8CE" }}>
+                  {levels.map(lv => (
+                    <button key={lv.id} onClick={() => { setEditLevel(lv); setEditRoom(lv.rooms[0]); setShowAddTask(false); setEditingTask(null); }} style={{ flex:1, background:editLevel.id===lv.id?lv.color+"18":"none", border:"none", padding:"12px 4px 10px", cursor:"pointer", fontFamily:"inherit", fontSize:10, fontWeight:editLevel.id===lv.id?"bold":"normal", color:editLevel.id===lv.id?lv.color:"#999", borderBottom:editLevel.id===lv.id?"3px solid "+lv.color:"3px solid transparent", textTransform:"uppercase" }}>
+                      <div style={{ fontSize:16, marginBottom:3 }}>{lv.icon}</div>{lv.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ padding:"10px 12px 0", display:"flex", gap:6, overflowX:"auto" }}>
+                  {editLevel.rooms.map(room => (
+                    <button key={room.id} onClick={() => { setEditRoom(room); setShowAddTask(false); setEditingTask(null); }} style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 12px", borderRadius:16, border:"1px solid "+(editRoom.id===room.id?editLevel.color:"#DDD8CE"), background:editRoom.id===room.id?editLevel.color:"#fff", color:editRoom.id===room.id?"#fff":"#555", cursor:"pointer", fontFamily:"inherit", fontSize:11, whiteSpace:"nowrap", flexShrink:0 }}>
+                      <RoomIcon icon={room.icon} size={13} /><span>{room.name}</span>
+                    </button>
+                  ))}
+                </div>
+                <div style={{ padding:"12px 12px 0" }}>
+                  {frequencies.map(freq => {
+                    const tasks = getTaskList(editRoom.id, freq);
+                    const fmr = freqMeta[freq];
+                    return (
+                      <div key={freq} style={{ marginBottom:16 }}>
+                        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                            <div style={{ width:8, height:8, borderRadius:"50%", background:fmr.dot }} />
+                            <span style={{ fontSize:11, fontWeight:"bold", color:fmr.text, textTransform:"uppercase" }}>{freq}</span>
+                            <span style={{ fontSize:10, color:"#BBB" }}>({tasks.length})</span>
+                          </div>
+                          <button onClick={() => { setShowAddTask(true); setNewTaskFreq(freq); setNewTaskEditFreq(freq); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); setEditingTask(null); }} style={{ fontSize:11, color:fmr.text, background:fmr.bg, border:"1px solid "+fmr.border, borderRadius:10, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit" }}>+ Add</button>
+                        </div>
+                        {showAddTask && newTaskFreq===freq && editingTask===null && (
+                          <EditForm fmr={fmr}
+                            onSave={() => {
+                              if (!newTaskText.trim()) return;
+                              const tgt = newTaskEditFreq;
+                              const updated = (prev => { const snap=ensureSnapshot(editRoom.id,tgt,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[tgt]:[...snap[editRoom.id][tgt],{text:newTaskText.trim(),assignees:newTaskAssignees,time:newTaskTime.trim()}]}}; })(customTasks);
+                              setCustomTasks(updated); saveCustomTasks(updated);
+                              setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
+                            }}
+                            onCancel={() => { setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
+                          />
+                        )}
+                        {tasks.length===0 && !(showAddTask && newTaskFreq===freq) && <p style={{ fontSize:12, color:"#CCC", fontStyle:"italic", margin:"0 0 4px" }}>No {freq.toLowerCase()} tasks</p>}
+                        {tasks.map((task, i) => (
+                          <div key={i} style={{ marginBottom:5 }}>
+                            {editingTask?.roomId===editRoom.id && editingTask?.freq===freq && editingTask?.index===i ? (
+                              <EditForm fmr={fmr}
+                                onSave={() => {
+                                  if (!newTaskText.trim()) return;
+                                  const tgt = newTaskEditFreq;
+                                  let updated = (prev => { const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks);
+                                  updated = (prev => { const snap=ensureSnapshot(editRoom.id,tgt,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[tgt]:[...snap[editRoom.id][tgt],{text:newTaskText.trim(),assignees:newTaskAssignees,time:newTaskTime.trim()}]}}; })(updated);
+                                  setCustomTasks(updated); saveCustomTasks(updated);
+                                  setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
+                                }}
+                                onCancel={() => { setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
+                              />
+                            ) : (
+                              <div style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"9px 12px", background:"#fff", border:"1px solid #E4E0D8", borderRadius:10 }}>
+                                <div style={{ flex:1, minWidth:0 }}>
+                                  <p style={{ margin:0, fontSize:13, color:"#1A1A1A" }}>{task.text}</p>
+                                  <div style={{ display:"flex", gap:6, marginTop:4, flexWrap:"wrap", alignItems:"center" }}>
+                                    {task.assignees?.length > 0 && task.assignees.map(aid => { const m=FAMILY.find(f=>f.id===aid); return m?<Avatar key={aid} member={m} size={16} fontSize={8} />:null; })}
+                                    {task.time && <span style={{ fontSize:10, color:"#AAA", background:"#F5F2EC", padding:"1px 6px", borderRadius:6 }}>~{task.time}</span>}
+                                  </div>
+                                </div>
+                                <button onClick={() => { setEditingTask({roomId:editRoom.id,freq,index:i}); setNewTaskText(task.text); setNewTaskAssignees(task.assignees||[]); setNewTaskTime(task.time||""); setNewTaskEditFreq(freq); setShowAddTask(false); }} style={{ fontSize:11, color:"#AAA", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Edit</button>
+                                <button onClick={() => { const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }} style={{ fontSize:11, color:"#D47F6B", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Delete</button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>)}
+            </>)}
+
+            {/* ── BACK-DATE MODE ── */}
+            {editSubMode === "backdate" && (
+              <div style={{ padding:"10px 12px 0" }}>
+                <p style={{ margin:"0 0 12px", fontSize:11, color:"#888" }}>Select a day and toggle task completions. Changes affect points and allowance calculations immediately.</p>
+
+                {/* Day selector */}
+                <div style={{ display:"flex", gap:6, marginBottom:14, overflowX:"auto", paddingBottom:4 }}>
+                  {pastDays.map((d, i) => {
+                    const isSelected = backdateSelectedDay === d.toDateString();
+                    const isToday = i === 0;
+                    return (
+                      <button key={i} onClick={() => setBackdateSelectedDay(d.toDateString())} style={{ flexShrink:0, padding:"6px 12px", borderRadius:12, border:"1px solid "+(isSelected?"#5B9BD5":"#DDD8CE"), background:isSelected?"#5B9BD5":isToday?"#EBF4FC":"#fff", color:isSelected?"#fff":isToday?"#1A4F7A":"#555", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:isSelected?"bold":"normal" }}>
+                        {isToday ? "Today" : d.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"})}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Tasks for selected day (Daily only, for each family member) */}
+                {backdateSelectedDay && (() => {
+                  const selDate = pastDays.find(d => d.toDateString() === backdateSelectedDay) || new Date();
+                  const selTs = selDate.getTime();
+                  const freq = "Daily";
+                  return (
+                    <div>
+                      {FAMILY.map(member => {
+                        const memberTasks = [];
+                        allRooms.forEach(room => {
+                          const tasks = getTaskList(room.id, freq);
+                          tasks.forEach((task, i) => {
+                            const nameTag = task.text.match(/\((\w+)\)$/);
+                            if (nameTag && nameTag[1].toLowerCase() !== member.name.toLowerCase()) return;
+                            const vis = !nameTag || nameTag[1].toLowerCase() === member.name.toLowerCase() || room.id === member.ownRoomId || (task.assignees||[]).includes(member.id);
+                            if (!vis && member.isKid) return;
+                            memberTasks.push({ room, task, taskIndex: i });
+                          });
+                        });
+                        if (memberTasks.length === 0) return null;
+                        return (
+                          <div key={member.id} style={{ marginBottom:14, background:"#fff", borderRadius:12, border:"1px solid "+member.color+"33", overflow:"hidden" }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 14px", background:member.color+"12", borderBottom:"1px solid "+member.color+"22" }}>
+                              <Avatar member={member} size={24} fontSize={11} />
+                              <span style={{ fontSize:12, fontWeight:"bold", color:member.color }}>{member.name}</span>
+                              <span style={{ fontSize:10, color:"#AAA", marginLeft:"auto" }}>Daily tasks</span>
+                            </div>
+                            {memberTasks.map(({ room, task, taskIndex }, idx) => {
+                              const found = isCompletedOn(room.id, freq, taskIndex, selTs);
+                              const done = !!found;
+                              return (
+                                <div key={idx} onClick={() => {
+                                  if (done) {
+                                    // Remove this specific completion
+                                    setCompletions(prev => { const next={...prev}; delete next[found.key]; saveCompletions(next); return next; });
+                                  } else {
+                                    backdateToggle(room.id, freq, taskIndex, member.id, selTs);
+                                  }
+                                }} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 14px", borderTop:idx>0?"1px solid #F5F2EC":"none", cursor:"pointer", background:done?"rgba(255,255,255,0.6)":"#fff" }}>
+                                  <div style={{ width:18, height:18, borderRadius:"50%", border:"2px solid "+(done?member.color:"#CCC"), background:done?member.color:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                                    {done && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                  </div>
+                                  <div style={{ flex:1, minWidth:0 }}>
+                                    <p style={{ margin:0, fontSize:12, color:done?"#AAA":"#1A1A1A", textDecoration:done?"line-through":"none" }}>{task.text}</p>
+                                    <p style={{ margin:0, fontSize:10, color:"#BBB" }}>{room.name}</p>
+                                  </div>
+                                  {task.time && <span style={{ fontSize:9, color:"#CCC", background:"#F5F2EC", padding:"1px 5px", borderRadius:5 }}>~{task.time}</span>}
+                                  {done && found.c && <span style={{ fontSize:9, color:member.color, flexShrink:0 }}>{fmt(found.c.at)}</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         );
       })()}
+
 
     </div>
   );
