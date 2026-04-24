@@ -806,6 +806,7 @@ export default function CleaningSchedule() {
   const [allowanceLoaded, setAllowanceLoaded] = useState(false);
   const [adjAmounts, setAdjAmounts] = useState({});
   const [adjNotes, setAdjNotes] = useState({});
+  const [historyExpanded, setHistoryExpanded] = useState({});
 
   const writingRef = useRef(false);
   const isKidMode = activeMember.isKid;
@@ -1215,11 +1216,26 @@ export default function CleaningSchedule() {
       </div>
 
       {/* TABS */}
-      <div style={{ display: "flex", background: "#111", borderTop: "1px solid #2A2A2A", overflowX: "auto" }}>
-        {tabs.map(([v,label]) => (
-          <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "9px 4px", cursor: "pointer", fontFamily: "inherit", fontSize: 10, color: view===v?"#F5F2EC":"#555", borderBottom: view===v?"2px solid #F5F2EC":"2px solid transparent", textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap", minWidth: 0 }}>{label}</button>
-        ))}
-      </div>
+      {isKidMode ? (
+        <div style={{ display: "flex", background: "#111", borderTop: "1px solid #2A2A2A" }}>
+          {tabs.map(([v,label]) => (
+            <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "10px 4px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: view===v?"#F5F2EC":"#555", borderBottom: view===v?"2px solid #F5F2EC":"2px solid transparent", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</button>
+          ))}
+        </div>
+      ) : (
+        <div style={{ background: "#111", borderTop: "1px solid #2A2A2A" }}>
+          <div style={{ display: "flex" }}>
+            {tabs.slice(0, 3).map(([v,label]) => (
+              <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "9px 4px 7px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: view===v?"#F5F2EC":"#555", borderBottom: view===v?"2px solid #F5F2EC":"2px solid transparent", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", borderTop: "1px solid #1E1E1E" }}>
+            {tabs.slice(3).map(([v,label]) => (
+              <button key={v} onClick={() => setView(v)} style={{ flex: 1, background: "none", border: "none", padding: "9px 4px 7px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: view===v?"#F5F2EC":"#555", borderBottom: view===v?"2px solid #F5F2EC":"2px solid transparent", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ═══ LEADERBOARD VIEW ═══ */}
       {view === "leaderboard" && (() => {
@@ -1483,20 +1499,22 @@ export default function CleaningSchedule() {
       {view === "allowance" && (() => {
         const allowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
 
+        // Payout: resets balance to 0, adds a payout entry to the unified history (never deleted)
         function handlePayout(kid) {
-          const current = allowanceData[kid.id] || { balance: 0, history: [], payoutHistory: [] };
+          const current = allowanceData[kid.id] || { balance: 0, history: [] };
           const amount = current.balance || 0;
           if (amount <= 0) return;
           const updated = {
             ...allowanceData,
             [kid.id]: {
+              ...current,
               balance: 0,
               lastAwardedDay: current.lastAwardedDay,
-              history: [],  // reset current-cycle history on payout
-              payoutHistory: [...(current.payoutHistory || []), {
-                type: "payout", amount, date: Date.now(),
+              history: [...(current.history || []), {
+                type: "payout",
+                amount,
+                date: Date.now(),
                 note: "Paid out to " + kid.name,
-                cycleHistory: current.history || [],
               }],
             }
           };
@@ -1531,6 +1549,22 @@ export default function CleaningSchedule() {
 
         const inSt = { fontSize: 13, padding: "7px 10px", border: "1px solid #DDD8CE", borderRadius: 8, fontFamily: "inherit", background: "#fff", boxSizing: "border-box" };
 
+        function entryColor(entry, kidColor) {
+          if (entry.type === "deduct") return "#D47F6B";
+          if (entry.type === "payout") return "#D47F6B";
+          if (entry.type === "earn") return kidColor;
+          return "#6DB894"; // add
+        }
+        function entryIcon(entry) {
+          if (entry.type === "payout") return "💸";
+          if (entry.type === "deduct") return "📉";
+          if (entry.type === "earn") return "✅";
+          return "📈";
+        }
+        function entrySign(entry) {
+          return (entry.type === "deduct" || entry.type === "payout") ? "−" : "+";
+        }
+
         return (
           <div style={{ paddingBottom: 60 }}>
             <div style={{ padding: "14px 14px 8px" }}>
@@ -1539,14 +1573,20 @@ export default function CleaningSchedule() {
             </div>
 
             {allowanceKids.map(kid => {
-              const data = allowanceData[kid.id] || { balance: 0, history: [], payoutHistory: [] };
+              const data = allowanceData[kid.id] || { balance: 0, history: [] };
               const balance = data.balance || 0;
-              const history = data.history || [];
-              const payoutHistory = data.payoutHistory || [];
-              const lastPayout = payoutHistory.length > 0 ? payoutHistory[payoutHistory.length - 1] : null;
+              const allHistory = [...(data.history || [])].reverse(); // newest first
+              const lastPayout = [...(data.history || [])].reverse().find(h => h.type === "payout");
+
+              // Show 5 by default, up to 30 when expanded
+              const showAll = historyExpanded[kid.id];
+              const displayHistory = showAll ? allHistory.slice(0, 30) : allHistory.slice(0, 5);
+              const hasMore = allHistory.length > 5;
+              const hiddenCount = Math.min(allHistory.length, 30) - 5;
 
               return (
                 <div key={kid.id} style={{ margin: "0 14px 18px", background: "#fff", borderRadius: 14, border: "2px solid " + kid.color + "55", overflow: "hidden" }}>
+
                   {/* Header */}
                   <div style={{ padding: "14px 14px 10px", background: kid.color + "12", borderBottom: "1px solid " + kid.color + "22" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1577,19 +1617,8 @@ export default function CleaningSchedule() {
                   <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
                     <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>Manual Adjustment</p>
                     <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                      <input
-                        type="number" min="0" step="0.50"
-                        value={adjAmounts[kid.id] || ""}
-                        onChange={e => setAdjAmounts(prev => ({ ...prev, [kid.id]: e.target.value }))}
-                        placeholder="$0.00"
-                        style={{ ...inSt, width: 80 }}
-                      />
-                      <input
-                        value={adjNotes[kid.id] || ""}
-                        onChange={e => setAdjNotes(prev => ({ ...prev, [kid.id]: e.target.value }))}
-                        placeholder="Reason (optional)"
-                        style={{ ...inSt, flex: 1 }}
-                      />
+                      <input type="number" min="0" step="0.50" value={adjAmounts[kid.id] || ""} onChange={e => setAdjAmounts(prev => ({ ...prev, [kid.id]: e.target.value }))} placeholder="$0.00" style={{ ...inSt, width: 80 }} />
+                      <input value={adjNotes[kid.id] || ""} onChange={e => setAdjNotes(prev => ({ ...prev, [kid.id]: e.target.value }))} placeholder="Reason (optional)" style={{ ...inSt, flex: 1 }} />
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button onClick={() => handleAdjust(kid, true)} style={{ flex: 1, padding: "7px", background: "#6DB894", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>+ Add</button>
@@ -1597,58 +1626,42 @@ export default function CleaningSchedule() {
                     </div>
                   </div>
 
-                  {/* Current cycle history */}
-                  {history.length > 0 && (
-                    <div>
-                      <p style={{ margin: 0, padding: "8px 14px 4px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>This Cycle</p>
-                      {[...history].reverse().map((entry, i) => {
-                        const isEarn = entry.type === "earn";
-                        const isAdd = entry.type === "add";
-                        const isDeduct = entry.type === "deduct";
-                        const color = isDeduct ? "#D47F6B" : isEarn ? kid.color : "#6DB894";
-                        const icon = isDeduct ? "−" : "+";
-                        return (
-                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderTop: "1px solid #F5F2EC" }}>
-                            <div style={{ width: 26, height: 26, borderRadius: "50%", background: color + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                              <span style={{ fontSize: 12 }}>{isDeduct ? "📉" : isEarn ? "✅" : "📈"}</span>
-                            </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{entry.note}</p>
-                              <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(entry.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
-                            </div>
-                            <span style={{ fontSize: 13, fontWeight: "bold", color, flexShrink: 0 }}>{icon}${entry.amount.toFixed(2)}</span>
-                          </div>
-                        );
-                      })}
+                  {/* Transaction history */}
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px 4px" }}>
+                      <p style={{ margin: 0, fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>History</p>
+                      <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>{allHistory.length} transaction{allHistory.length !== 1 ? "s" : ""}</p>
                     </div>
-                  )}
-                  {history.length === 0 && (
-                    <p style={{ margin: 0, padding: "12px 14px", fontSize: 12, color: "#CCC", fontStyle: "italic" }}>No activity this cycle yet.</p>
-                  )}
+                    {allHistory.length === 0 && (
+                      <p style={{ margin: 0, padding: "10px 14px 14px", fontSize: 12, color: "#CCC", fontStyle: "italic" }}>No transactions yet.</p>
+                    )}
+                    {displayHistory.map((entry, i) => {
+                      const color = entryColor(entry, kid.color);
+                      const isPayout = entry.type === "payout";
+                      return (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderTop: "1px solid #F5F2EC", background: isPayout ? "#FFF8F6" : "#fff" }}>
+                          <div style={{ width: 26, height: 26, borderRadius: "50%", background: color + "20", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                            <span style={{ fontSize: 12 }}>{entryIcon(entry)}</span>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ margin: 0, fontSize: 12, color: isPayout ? "#888" : "#1A1A1A", fontStyle: isPayout ? "italic" : "normal" }}>{entry.note}</p>
+                            <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(entry.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
+                          </div>
+                          <span style={{ fontSize: 13, fontWeight: "bold", color, flexShrink: 0 }}>
+                            {entrySign(entry)}${entry.amount.toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {hasMore && (
+                      <button onClick={() => setHistoryExpanded(prev => ({ ...prev, [kid.id]: !showAll }))} style={{ width: "100%", padding: "10px", background: "none", border: "none", borderTop: "1px solid #F5F2EC", cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: kid.color, fontWeight: "bold" }}>
+                        {showAll ? "Show less" : "Show " + hiddenCount + " more transactions"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
-
-            {/* Payout history */}
-            {allowanceKids.some(k => (allowanceData[k.id]?.payoutHistory || []).length > 0) && (
-              <div style={{ padding: "0 14px" }}>
-                <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: "bold", color: "#888", textTransform: "uppercase", letterSpacing: "0.06em" }}>Payout History</p>
-                <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #E4E0D8", overflow: "hidden" }}>
-                  {allowanceKids.flatMap(kid =>
-                    (allowanceData[kid.id]?.payoutHistory || []).map(p => ({ ...p, kid }))
-                  ).sort((a,b) => b.date - a.date).map((p, i, arr) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: i < arr.length-1 ? "1px solid #F5F2EC" : "none" }}>
-                      <Avatar member={p.kid} size={24} fontSize={11} />
-                      <div style={{ flex: 1 }}>
-                        <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{p.kid.name} — ${p.amount.toFixed(2)}</p>
-                        <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(p.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
-                      </div>
-                      <span style={{ fontSize: 13, fontWeight: "bold", color: "#D47F6B" }}>-${p.amount.toFixed(2)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         );
       })()}
@@ -2158,50 +2171,131 @@ export default function CleaningSchedule() {
                 {backdateSelectedDay && (() => {
                   const selDate = pastDays.find(d => d.toDateString() === backdateSelectedDay) || new Date();
                   const selTs = selDate.getTime();
+                  const selDateStr = selDate.toDateString();
                   const freq = "Daily";
+
+                  // Get ALL completions for a task on the selected date (any family member)
+                  function getAllCompletionsOnDate(roomId, taskIndex) {
+                    const baseKey = roomId + "-" + freq + "-" + taskIndex;
+                    const found = [];
+                    Object.entries(completions).forEach(([k, c]) => {
+                      if (!c || !c.at) return;
+                      if (!k.startsWith(baseKey)) return;
+                      if (new Date(c.at).toDateString() !== selDateStr) return;
+                      const completer = FAMILY.find(f => f.id === c.by);
+                      found.push({ key: k, c, member: completer });
+                    });
+                    return found;
+                  }
+
+                  function isCheckedByMember(roomId, taskIndex, memberId) {
+                    const baseKey = roomId + "-" + freq + "-" + taskIndex;
+                    // Check shared key and member-specific key
+                    const keys = [baseKey, baseKey + "-" + memberId];
+                    return keys.find(k => {
+                      const c = completions[k];
+                      return c && c.at && new Date(c.at).toDateString() === selDateStr && c.by === memberId;
+                    }) || null;
+                  }
+
+                  // Build a flat list of all daily tasks across all rooms, deduplicated
+                  const allDailyTasks = [];
+                  allRooms.forEach(room => {
+                    const tasks = getTaskList(room.id, freq);
+                    tasks.forEach((task, i) => {
+                      allDailyTasks.push({ room, task, taskIndex: i });
+                    });
+                  });
+
+                  // Determine which family members are relevant for each task
+                  function getRelevantMembers(task, roomId) {
+                    const nameTag = task.text.match(/\((\w+)\)$/);
+                    return FAMILY.filter(member => {
+                      if (nameTag) return nameTag[1].toLowerCase() === member.name.toLowerCase();
+                      if (member.isKid) {
+                        return roomId === member.ownRoomId || (task.assignees||[]).includes(member.id);
+                      }
+                      return true; // adults see all
+                    });
+                  }
+
+                  // Group tasks by room for display
+                  const tasksByRoom = {};
+                  allDailyTasks.forEach(({ room, task, taskIndex }) => {
+                    const relevant = getRelevantMembers(task, room.id);
+                    if (relevant.length === 0) return;
+                    if (!tasksByRoom[room.id]) tasksByRoom[room.id] = { room, tasks: [] };
+                    tasksByRoom[room.id].tasks.push({ task, taskIndex, relevant });
+                  });
+
                   return (
                     <div>
-                      {FAMILY.map(member => {
-                        const memberTasks = [];
-                        allRooms.forEach(room => {
-                          const tasks = getTaskList(room.id, freq);
-                          tasks.forEach((task, i) => {
-                            const nameTag = task.text.match(/\((\w+)\)$/);
-                            if (nameTag && nameTag[1].toLowerCase() !== member.name.toLowerCase()) return;
-                            const vis = !nameTag || nameTag[1].toLowerCase() === member.name.toLowerCase() || room.id === member.ownRoomId || (task.assignees||[]).includes(member.id);
-                            if (!vis && member.isKid) return;
-                            memberTasks.push({ room, task, taskIndex: i });
-                          });
-                        });
-                        if (memberTasks.length === 0) return null;
+                      {Object.values(tasksByRoom).map(({ room, tasks }) => {
+                        const level = levels.find(l => l.rooms.some(r => r.id === room.id));
                         return (
-                          <div key={member.id} style={{ marginBottom:14, background:"#fff", borderRadius:12, border:"1px solid "+member.color+"33", overflow:"hidden" }}>
-                            <div style={{ display:"flex", alignItems:"center", gap:8, padding:"10px 14px", background:member.color+"12", borderBottom:"1px solid "+member.color+"22" }}>
-                              <Avatar member={member} size={24} fontSize={11} />
-                              <span style={{ fontSize:12, fontWeight:"bold", color:member.color }}>{member.name}</span>
-                              <span style={{ fontSize:10, color:"#AAA", marginLeft:"auto" }}>Daily tasks</span>
+                          <div key={room.id} style={{ marginBottom: 14, background: "#fff", borderRadius: 12, border: "1px solid #E4E0D8", overflow: "hidden" }}>
+                            {/* Room header */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: (level?.color || "#888") + "12", borderBottom: "1px solid #F0EDE6" }}>
+                              <RoomIcon icon={room.icon} size={15} />
+                              <span style={{ fontSize: 12, fontWeight: "bold", color: "#1A1A1A" }}>{room.name}</span>
+                              {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold", marginLeft: 2 }}>{level.label}</span>}
                             </div>
-                            {memberTasks.map(({ room, task, taskIndex }, idx) => {
-                              const found = isCompletedOn(room.id, freq, taskIndex, selTs);
-                              const done = !!found;
+
+                            {tasks.map(({ task, taskIndex, relevant }, idx) => {
+                              const allDone = getAllCompletionsOnDate(room.id, taskIndex);
+                              const anyDone = allDone.length > 0;
+
                               return (
-                                <div key={idx} onClick={() => {
-                                  if (done) {
-                                    // Remove this specific completion
-                                    setCompletions(prev => { const next={...prev}; delete next[found.key]; saveCompletions(next); return next; });
-                                  } else {
-                                    backdateToggle(room.id, freq, taskIndex, member.id, selTs);
-                                  }
-                                }} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 14px", borderTop:idx>0?"1px solid #F5F2EC":"none", cursor:"pointer", background:done?"rgba(255,255,255,0.6)":"#fff" }}>
-                                  <div style={{ width:18, height:18, borderRadius:"50%", border:"2px solid "+(done?member.color:"#CCC"), background:done?member.color:"transparent", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                                    {done && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                <div key={taskIndex} style={{ padding: "10px 14px", borderTop: idx > 0 ? "1px solid #F5F2EC" : "none" }}>
+                                  {/* Task name + time */}
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: relevant.length > 1 || anyDone ? 8 : 0 }}>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{task.text}</p>
+                                      <p style={{ margin: "2px 0 0", fontSize: 10, color: "#BBB" }}>{room.name}{task.time ? " · ~" + task.time : ""}</p>
+                                    </div>
                                   </div>
-                                  <div style={{ flex:1, minWidth:0 }}>
-                                    <p style={{ margin:0, fontSize:12, color:done?"#AAA":"#1A1A1A", textDecoration:done?"line-through":"none" }}>{task.text}</p>
-                                    <p style={{ margin:0, fontSize:10, color:"#BBB" }}>{room.name}</p>
+
+                                  {/* Per-member completion rows */}
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                    {relevant.map(member => {
+                                      const matchKey = isCheckedByMember(room.id, taskIndex, member.id);
+                                      const done = !!matchKey;
+                                      const completion = matchKey ? completions[matchKey] : null;
+                                      const completedBy = completion ? FAMILY.find(f => f.id === completion.by) : null;
+
+                                      return (
+                                        <div key={member.id} onClick={() => {
+                                          if (done) {
+                                            setCompletions(prev => { const next = {...prev}; delete next[matchKey]; saveCompletions(next); return next; });
+                                          } else {
+                                            backdateToggle(room.id, freq, taskIndex, member.id, selTs);
+                                          }
+                                        }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: done ? member.color + "10" : "#F9F8F6", cursor: "pointer", border: "1px solid " + (done ? member.color + "33" : "#ECEAE3") }}>
+                                          {/* Checkbox */}
+                                          <div style={{ width: 18, height: 18, borderRadius: "50%", border: "2px solid " + (done ? member.color : "#CCC"), background: done ? member.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                            {done && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                          </div>
+                                          {/* Assigned to */}
+                                          <Avatar member={member} size={20} fontSize={9} />
+                                          <span style={{ fontSize: 11, color: done ? member.color : "#888", fontWeight: done ? "bold" : "normal", flex: 1 }}>{member.name}</span>
+                                          {/* Who actually did it + when */}
+                                          {done && completedBy && (
+                                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                                              {completedBy.id !== member.id && (
+                                                <>
+                                                  <span style={{ fontSize: 9, color: "#AAA" }}>by</span>
+                                                  <Avatar member={completedBy} size={16} fontSize={7} />
+                                                  <span style={{ fontSize: 9, color: completedBy.color, fontWeight: "bold" }}>{completedBy.name}</span>
+                                                </>
+                                              )}
+                                              <span style={{ fontSize: 9, color: "#CCC" }}>{fmt(completion.at)}</span>
+                                            </div>
+                                          )}
+                                          {!done && <span style={{ fontSize: 9, color: "#CCC", flexShrink: 0 }}>tap to mark done</span>}
+                                        </div>
+                                      );
+                                    })}
                                   </div>
-                                  {task.time && <span style={{ fontSize:9, color:"#CCC", background:"#F5F2EC", padding:"1px 5px", borderRadius:5 }}>~{task.time}</span>}
-                                  {done && found.c && <span style={{ fontSize:9, color:member.color, flexShrink:0 }}>{fmt(found.c.at)}</span>}
                                 </div>
                               );
                             })}
