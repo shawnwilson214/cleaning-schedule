@@ -950,26 +950,46 @@ export default function CleaningSchedule() {
   // Load allowance from Firebase
   useEffect(() => {
     const unsub = dbListen("allowance", (result) => {
-      if (result?.value) setAllowanceData(JSON.parse(result.value));
+      if (result?.value) {
+        const raw = JSON.parse(result.value);
+        // Migrate old earn entries that lack dayKey — infer from date field
+        let needsSave = false;
+        Object.keys(raw).forEach(kidId => {
+          const kid = raw[kidId];
+          if (!kid.history) return;
+          kid.history = kid.history.map(h => {
+            if (h.type === "earn" && !h.dayKey && h.date) {
+              needsSave = true;
+              return { ...h, dayKey: getPeriodKey("Daily", new Date(h.date)) };
+            }
+            return h;
+          });
+        });
+        setAllowanceData(raw);
+        if (needsSave) dbSet("allowance", JSON.stringify(raw));
+      }
       setAllowanceLoaded(true);
     });
     return () => unsub();
   }, []);
 
-  // Award $2/day when a kid completes all their daily tasks for the day
-  // Run whenever completions change
-  const awardedTodayRef = useRef({});
+  // Recalculate allowance whenever completions change.
+  // For each kid, for each of the past 7 days:
+  //   - All daily tasks done → ensure a $2 earn entry exists for that day
+  //   - NOT all done → remove any earn entry for that day (revoke award)
   useEffect(() => {
     if (!allowanceLoaded) return;
-    const allowanceKids = FAMILY.filter(f => f.isKid && (f.id === "zach" || f.id === "kyle"));
-    const todayKey = getPeriodKey("Daily");
+    const allowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
 
-    allowanceKids.forEach(kid => {
-      // Already awarded today?
-      if (awardedTodayRef.current[kid.id] === todayKey) return;
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i); d.setHours(12, 0, 0, 0);
+      days.push({ date: d, periodKey: getPeriodKey("Daily", d) });
+    }
 
-      // Get all daily tasks visible to this kid
-      let totalDaily = 0, doneDaily = 0;
+    function countDailyForKidOnDate(kid, dateObj) {
+      const dateStr = dateObj.toDateString();
+      let total = 0, done = 0;
       allRooms.forEach(room => {
         const tasks = getTaskList(room.id, "Daily");
         const kidTasks = tasks.filter(t => {
@@ -978,35 +998,61 @@ export default function CleaningSchedule() {
           if (room.id === kid.ownRoomId) return true;
           return (t.assignees || []).includes(kid.id);
         });
-        kidTasks.forEach((t, idx) => {
+        kidTasks.forEach(t => {
           const fi = tasks.findIndex(ft => ft.text === t.text);
           if (fi === -1) return;
-          totalDaily++;
+          total++;
           const baseKey = room.id + "-Daily-" + fi;
           const kidKey = baseKey + "-" + kid.id;
-          if (completions[kidKey] || completions[baseKey]) doneDaily++;
+          const completedOnDay = [completions[kidKey], completions[baseKey]]
+            .some(c => c && c.at && new Date(c.at).toDateString() === dateStr);
+          if (completedOnDay) done++;
         });
       });
+      return { total, done };
+    }
 
-      if (totalDaily > 0 && doneDaily === totalDaily) {
-        // All daily tasks done — award $2 if not already awarded today
-        awardedTodayRef.current[kid.id] = todayKey;
-        setAllowanceData(prev => {
-          const current = prev[kid.id] || { balance: 0, history: [] };
-          // Don't double-award
-          if (current.lastAwardedDay === todayKey) return prev;
-          const updated = {
-            ...prev,
-            [kid.id]: {
-              balance: (current.balance || 0) + 2,
-              lastAwardedDay: todayKey,
-              history: [...(current.history || []), { type: "earn", amount: 2, date: Date.now(), note: "All daily tasks completed" }],
-            }
-          };
-          saveAllowance(updated);
-          return updated;
+    setAllowanceData(prev => {
+      let changed = false;
+      const next = { ...prev };
+
+      allowanceKids.forEach(kid => {
+        const current = next[kid.id] || { balance: 0, history: [] };
+        let history = [...(current.history || [])];
+        let balance = current.balance || 0;
+        let lastAwardedDay = current.lastAwardedDay;
+
+        days.forEach(({ date, periodKey }) => {
+          const { total, done } = countDailyForKidOnDate(kid, date);
+          const allDone = total > 0 && done === total;
+          const earnIdx = history.findIndex(h => h.type === "earn" && h.dayKey === periodKey);
+          const hasEarn = earnIdx !== -1;
+
+          if (allDone && !hasEarn) {
+            history = [...history, {
+              type: "earn", amount: 2,
+              date: date.getTime(),
+              dayKey: periodKey,
+              note: "All daily tasks completed (" + date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + ")",
+            }];
+            balance += 2;
+            if (periodKey === getPeriodKey("Daily")) lastAwardedDay = periodKey;
+            changed = true;
+          } else if (!allDone && hasEarn) {
+            balance = Math.max(0, balance - history[earnIdx].amount);
+            history = history.filter((_, i) => i !== earnIdx);
+            if (lastAwardedDay === periodKey) lastAwardedDay = null;
+            changed = true;
+          }
         });
-      }
+
+        if (changed) {
+          next[kid.id] = { ...current, balance: Math.max(0, balance), history, lastAwardedDay };
+        }
+      });
+
+      if (changed) { saveAllowance(next); return next; }
+      return prev;
     });
   }, [completions, allowanceLoaded]);
 
