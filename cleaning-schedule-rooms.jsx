@@ -1029,11 +1029,12 @@ export default function CleaningSchedule() {
           const hasEarn = earnIdx !== -1;
 
           if (allDone && !hasEarn) {
+            const earnDate = date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
             history = [...history, {
               type: "earn", amount: 2,
               date: date.getTime(),
               dayKey: periodKey,
-              note: "All daily tasks completed (" + date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + ")",
+              note: "$2 earned · All daily tasks completed · " + earnDate,
             }];
             balance += 2;
             if (periodKey === getPeriodKey("Daily")) lastAwardedDay = periodKey;
@@ -1089,12 +1090,24 @@ export default function CleaningSchedule() {
   };
 
   // Get completion for a task key, respecting per-person keys for kids
+  // Get completion for a specific member on a task key
+  function getCompletionForMember(key, memberId) {
+    const member = FAMILY.find(f => f.id === memberId);
+    if (!member) return null;
+    if (member.isKid) {
+      // Kids always use member-specific key
+      return completions[key + "-" + memberId] || null;
+    }
+    // Adults use shared key
+    return completions[key] || null;
+  }
+
   function getCompletion(key) {
     if (isKidMode) {
-      // Kids only see their own completion
       return completions[key + "-" + activeMember.id] || null;
     }
-    // Adults: check the shared key plus all kid-specific keys, return most recent
+    // Adults: check shared key first, then all kid-specific keys
+    // Return the most recent valid completion
     const candidates = [completions[key]];
     FAMILY.filter(f => f.isKid).forEach(k => {
       candidates.push(completions[key + "-" + k.id]);
@@ -1105,8 +1118,18 @@ export default function CleaningSchedule() {
   }
 
   // Check if a task is done for the current viewer
-  function isDone(key) {
-    return !!getCompletion(key);
+  // For name-tagged/assigned tasks in adult mode, counts as done only if ALL assigned members have done it
+  function isDone(key, task) {
+    if (isKidMode) return !!getCompletion(key);
+    if (!task) return !!getCompletion(key);
+    const nameTag = task.text?.match(/\((\w+)\)$/);
+    const taggedMember = nameTag ? FAMILY.find(f => f.name.toLowerCase() === nameTag[1].toLowerCase()) : null;
+    const assignedMembers = taggedMember
+      ? [taggedMember]
+      : task.assignees?.length > 0 ? task.assignees.map(aid => FAMILY.find(f => f.id === aid)).filter(Boolean) : [];
+    if (assignedMembers.length === 0) return !!getCompletion(key);
+    // All assigned members must have completed it
+    return assignedMembers.every(m => !!getCompletionForMember(key, m.id));
   }
 
   // For adults, get ALL completions for a key (multiple kids may have completed it)
@@ -1191,7 +1214,7 @@ export default function CleaningSchedule() {
     const visible = getVisibleTasks(room.id, activeFreq);
     const full = getTaskList(room.id, activeFreq);
     totalTasks += visible.length;
-    visible.forEach(t => { const fi = full.findIndex(ft => ft.text === t.text); if (fi !== -1 && isDone(room.id+"-"+activeFreq+"-"+fi)) doneTasks++; });
+    visible.forEach(t => { const fi = full.findIndex(ft => ft.text === t.text); if (fi !== -1 && isDone(room.id+"-"+activeFreq+"-"+fi, t)) doneTasks++; });
   }));
   const overallPct = totalTasks ? Math.round(doneTasks/totalTasks*100) : 0;
 
@@ -1200,12 +1223,78 @@ export default function CleaningSchedule() {
     if (!task || typeof task.text !== "string") return null;
     const fi = allTasks.findIndex(ft => ft.text === task.text);
     const key = roomId+"-"+freq+"-"+fi;
+    const fmrUsed = fmr || freqMeta[freq];
+
+    // Detect if this task is name-tagged (e.g. "(Zach)") or assigned to specific people
+    const nameTag = task.text.match(/\((\w+)\)$/);
+    const taggedMember = nameTag
+      ? FAMILY.find(f => f.name.toLowerCase() === nameTag[1].toLowerCase())
+      : null;
+    const assignedMembers = taggedMember
+      ? [taggedMember]
+      : task.assignees?.length > 0
+        ? task.assignees.map(aid => FAMILY.find(f => f.id === aid)).filter(Boolean)
+        : [];
+
+    // For named/assigned tasks in adult mode: show per-person completion rows
+    // For kid mode or unassigned tasks: show single completion row
+    const showPerPerson = !isKidMode && assignedMembers.length > 0;
+
+    if (showPerPerson) {
+      // Render one sub-row per assigned member
+      return (
+        <div style={{ padding: "10px 14px", borderBottom: isLast ? "none" : "1px solid "+fmrUsed.border, background: "transparent" }}>
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ fontSize: 13, color: fmrUsed.text }}>{task.text}</span>
+            {task.time && <span style={{ fontSize: 9, color: "#AAA", background: "#F5F2EC", padding: "1px 6px", borderRadius: 6, marginLeft: 6 }}>~{task.time}</span>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {assignedMembers.map(member => {
+              const memberCompletion = getCompletionForMember(key, member.id);
+              const done = !!memberCompletion;
+              const completedBy = done ? FAMILY.find(f => f.id === memberCompletion.by) : null;
+              return (
+                <div key={member.id}
+                  onClick={() => {
+                    const personalKey = member.isKid ? key + "-" + member.id : key;
+                    setCompletions(prev => {
+                      const next = { ...prev };
+                      if (next[personalKey]) delete next[personalKey];
+                      else next[personalKey] = { by: member.id, name: member.name, color: member.color, at: Date.now(), freq, periodKey: getPeriodKey(freq), baseKey: key };
+                      saveCompletions(next);
+                      return next;
+                    });
+                  }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: done ? member.color+"10" : "#F9F8F6", cursor: "pointer", border: "1px solid "+(done ? member.color+"33" : "#ECEAE3") }}>
+                  <div style={{ width: 17, height: 17, borderRadius: "50%", border: "2px solid "+(done ? member.color : "#CCC"), background: done ? member.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    {done && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </div>
+                  <Avatar member={member} size={20} fontSize={9} />
+                  <span style={{ fontSize: 11, color: done ? member.color : "#888", fontWeight: done ? "bold" : "normal", flex: 1 }}>{member.name}</span>
+                  {done && completedBy && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                      {completedBy.id !== member.id && (
+                        <><Avatar member={completedBy} size={16} fontSize={7} /><span style={{ fontSize: 9, color: completedBy.color }}>{completedBy.name}</span></>
+                      )}
+                      <span style={{ fontSize: 9, color: "#CCC" }}>{fmt(memberCompletion.at)}</span>
+                    </div>
+                  )}
+                  {!done && <span style={{ fontSize: 9, color: "#DDD" }}>not done</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // Default: single completion row
     const completion = getCompletion(key);
     const done = !!completion;
     const member = done ? FAMILY.find(f => f.id === completion.by) : null;
-    const color = (fmr || freqMeta[freq]).text;
+    const color = fmrUsed.text;
     return (
-      <div onClick={() => toggleTask(key, freq)} style={{ padding: "10px 14px", borderBottom: isLast ? "none" : "1px solid "+(fmr||freqMeta[freq]).border, cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
+      <div onClick={() => toggleTask(key, freq)} style={{ padding: "10px 14px", borderBottom: isLast ? "none" : "1px solid "+fmrUsed.border, cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : "transparent" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid "+(done?completion.color:"#CCC"), background: done?completion.color:"transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
@@ -1248,12 +1337,23 @@ export default function CleaningSchedule() {
       <div style={{ background: "#1A1A1A", color: "#F5F2EC", padding: "20px 20px 14px" }}>
         <p style={{ fontSize: 10, letterSpacing: "0.25em", color: "#555", margin: "0 0 4px", textTransform: "uppercase" }}>Home Management</p>
         <h1 style={{ fontSize: 24, fontWeight: "normal", margin: "0 0 12px" }}>Cleaning Schedule</h1>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {FAMILY.map(m => (
-            <button key={m.id} onClick={() => setActiveMember(m)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, cursor: "pointer", border: "2px solid "+(activeMember.id===m.id?m.color:"transparent"), background: activeMember.id===m.id?m.color+"22":"rgba(255,255,255,0.07)", color: activeMember.id===m.id?"#fff":"#888", fontFamily: "inherit", fontSize: 12, fontWeight: activeMember.id===m.id?"bold":"normal" }}>
-              <Avatar member={m} size={22} fontSize={11} /><span>{m.name}</span>
-            </button>
-          ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {/* Adults row */}
+          <div style={{ display: "flex", gap: 8 }}>
+            {FAMILY.filter(m => !m.isKid).map(m => (
+              <button key={m.id} onClick={() => setActiveMember(m)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, cursor: "pointer", border: "2px solid "+(activeMember.id===m.id?m.color:"transparent"), background: activeMember.id===m.id?m.color+"22":"rgba(255,255,255,0.07)", color: activeMember.id===m.id?"#fff":"#888", fontFamily: "inherit", fontSize: 12, fontWeight: activeMember.id===m.id?"bold":"normal" }}>
+                <Avatar member={m} size={22} fontSize={11} /><span>{m.name}</span>
+              </button>
+            ))}
+          </div>
+          {/* Kids row */}
+          <div style={{ display: "flex", gap: 8 }}>
+            {FAMILY.filter(m => m.isKid).map(m => (
+              <button key={m.id} onClick={() => setActiveMember(m)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, cursor: "pointer", border: "2px solid "+(activeMember.id===m.id?m.color:"transparent"), background: activeMember.id===m.id?m.color+"22":"rgba(255,255,255,0.07)", color: activeMember.id===m.id?"#fff":"#888", fontFamily: "inherit", fontSize: 12, fontWeight: activeMember.id===m.id?"bold":"normal" }}>
+                <Avatar member={m} size={22} fontSize={11} /><span>{m.name}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <p style={{ fontSize: 11, color: "#555", margin: "8px 0 0" }}>
           Completing as <strong style={{ color: activeMember.color }}>{activeMember.name}</strong>
@@ -1551,13 +1651,18 @@ export default function CleaningSchedule() {
 
       {/* ═══ ALLOWANCE VIEW ═══ */}
       {view === "allowance" && (() => {
-        const allowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
+        const allAllowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
+        // Kids only see their own allowance; adults see all
+        const allowanceKids = isKidMode
+          ? allAllowanceKids.filter(f => f.id === activeMember.id)
+          : allAllowanceKids;
 
         // Payout: resets balance to 0, adds a payout entry to the unified history (never deleted)
         function handlePayout(kid) {
           const current = allowanceData[kid.id] || { balance: 0, history: [] };
           const amount = current.balance || 0;
           if (amount <= 0) return;
+          const payDate = new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
           const updated = {
             ...allowanceData,
             [kid.id]: {
@@ -1568,7 +1673,7 @@ export default function CleaningSchedule() {
                 type: "payout",
                 amount,
                 date: Date.now(),
-                note: "Paid out to " + kid.name,
+                note: "$" + amount.toFixed(2) + " paid out to " + kid.name + " · Balance reset to $0 · " + payDate,
               }],
             }
           };
@@ -1582,16 +1687,22 @@ export default function CleaningSchedule() {
           if (isNaN(adjAmt) || adjAmt <= 0) return;
           const current = allowanceData[kid.id] || { balance: 0, history: [] };
           const delta = isAdd ? adjAmt : -adjAmt;
+          const newBalance = Math.max(0, (current.balance || 0) + delta);
+          const adjDate = new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+          const baseNote = adjNote
+            ? adjNote
+            : isAdd ? "Manual bonus" : "Manual deduction";
+          const fullNote = baseNote + " · " + (isAdd ? "+" : "−") + "$" + adjAmt.toFixed(2) + " · Balance: $" + newBalance.toFixed(2) + " · " + adjDate;
           const updated = {
             ...allowanceData,
             [kid.id]: {
               ...current,
-              balance: Math.max(0, (current.balance || 0) + delta),
+              balance: newBalance,
               history: [...(current.history || []), {
                 type: isAdd ? "add" : "deduct",
                 amount: adjAmt,
                 date: Date.now(),
-                note: adjNote || (isAdd ? "Manual addition" : "Manual deduction"),
+                note: fullNote,
               }],
             }
           };
@@ -1660,15 +1771,17 @@ export default function CleaningSchedule() {
                     )}
                   </div>
 
-                  {/* Payout button */}
+                  {/* Payout button — adults only */}
+                  {!isKidMode && (
                   <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
                     <button onClick={() => handlePayout(kid)} disabled={balance <= 0} style={{ width: "100%", padding: "9px", background: balance > 0 ? kid.color : "#EEE", color: balance > 0 ? "#fff" : "#BBB", border: "none", borderRadius: 8, cursor: balance > 0 ? "pointer" : "not-allowed", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>
                       {balance > 0 ? "💸  Pay Out $" + balance.toFixed(2) : "Nothing to pay out"}
                     </button>
                   </div>
+                  )}
 
-                  {/* Manual adjustment */}
-                  <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
+                  {/* Manual adjustment — adults only */}
+                  {!isKidMode && (
                     <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>Manual Adjustment</p>
                     <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                       <input type="number" min="0" step="0.50" value={adjAmounts[kid.id] || ""} onChange={e => setAdjAmounts(prev => ({ ...prev, [kid.id]: e.target.value }))} placeholder="$0.00" style={{ ...inSt, width: 80 }} />
@@ -1679,6 +1792,7 @@ export default function CleaningSchedule() {
                       <button onClick={() => handleAdjust(kid, false)} style={{ flex: 1, padding: "7px", background: "#D47F6B", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>− Deduct</button>
                     </div>
                   </div>
+                  )}
 
                   {/* Transaction history */}
                   <div>
@@ -1876,7 +1990,7 @@ export default function CleaningSchedule() {
                       const full = getTaskList(room.id, activeFreq);
                       if (visible.length === 0) return null;
                       const colKey = room.id+"-"+activeFreq, isOpen = !collapsed[colKey];
-                      const doneCount = visible.filter(t => { const fi=full.findIndex(ft=>ft.text===t.text); return fi!==-1&&isDone(room.id+"-"+activeFreq+"-"+fi); }).length;
+                      const doneCount = visible.filter(t => { const fi=full.findIndex(ft=>ft.text===t.text); return fi!==-1&&isDone(room.id+"-"+activeFreq+"-"+fi, t); }).length;
                       const roomPct = visible.length ? Math.round(doneCount/visible.length*100) : 0;
                       const allDone = visible.length > 0 && doneCount === visible.length;
                       return (
@@ -1925,7 +2039,7 @@ export default function CleaningSchedule() {
               const full = getTaskList(activeRoom.id, freq);
               if (isKidMode && visible.length === 0) return null;
               const fmr=freqMeta[freq], colKey="room-"+activeRoom.id+"-"+freq, isOpen=!collapsed[colKey];
-              const doneCount = visible.filter(t => { const fi=full.findIndex(ft=>ft.text===t.text); return fi!==-1&&isDone(activeRoom.id+"-"+freq+"-"+fi); }).length;
+              const doneCount = visible.filter(t => { const fi=full.findIndex(ft=>ft.text===t.text); return fi!==-1&&isDone(activeRoom.id+"-"+freq+"-"+fi, t); }).length;
               const roomPct = visible.length ? Math.round(doneCount/visible.length*100) : 0;
               const allDone = visible.length > 0 && doneCount === visible.length;
               return (
@@ -2205,157 +2319,205 @@ export default function CleaningSchedule() {
 
             {/* ── BACK-DATE MODE ── */}
             {editSubMode === "backdate" && (
-              <div style={{ padding:"10px 12px 0" }}>
-                <p style={{ margin:"0 0 12px", fontSize:11, color:"#888" }}>Select a day and toggle task completions. Changes affect points and allowance calculations immediately.</p>
+              <div style={{ padding: "10px 12px 0" }}>
+                <p style={{ margin: "0 0 10px", fontSize: 11, color: "#888" }}>Pick a day to view and edit completions. Tap any row to check or uncheck. Updates points and allowance instantly.</p>
 
-                {/* Day selector */}
-                <div style={{ display:"flex", gap:6, marginBottom:14, overflowX:"auto", paddingBottom:4 }}>
+                {/* Day selector — past 7 days */}
+                <div style={{ display: "flex", gap: 5, marginBottom: 14, overflowX: "auto", paddingBottom: 4 }}>
                   {pastDays.map((d, i) => {
                     const isSelected = backdateSelectedDay === d.toDateString();
                     const isToday = i === 0;
                     return (
-                      <button key={i} onClick={() => setBackdateSelectedDay(d.toDateString())} style={{ flexShrink:0, padding:"6px 12px", borderRadius:12, border:"1px solid "+(isSelected?"#5B9BD5":"#DDD8CE"), background:isSelected?"#5B9BD5":isToday?"#EBF4FC":"#fff", color:isSelected?"#fff":isToday?"#1A4F7A":"#555", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:isSelected?"bold":"normal" }}>
-                        {isToday ? "Today" : d.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"})}
+                      <button key={i} onClick={() => setBackdateSelectedDay(d.toDateString())} style={{ flexShrink: 0, padding: "6px 12px", borderRadius: 12, border: "1px solid " + (isSelected ? "#5B9BD5" : "#DDD8CE"), background: isSelected ? "#5B9BD5" : isToday ? "#EBF4FC" : "#fff", color: isSelected ? "#fff" : isToday ? "#1A4F7A" : "#555", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: isSelected ? "bold" : "normal" }}>
+                        {isToday ? "Today" : d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}
                       </button>
                     );
                   })}
                 </div>
 
-                {/* Tasks for selected day (Daily only, for each family member) */}
                 {backdateSelectedDay && (() => {
                   const selDate = pastDays.find(d => d.toDateString() === backdateSelectedDay) || new Date();
-                  const selTs = selDate.getTime();
                   const selDateStr = selDate.toDateString();
-                  const freq = "Daily";
+                  const selTs = selDate.getTime();
 
-                  // Get ALL completions for a task on the selected date (any family member)
-                  function getAllCompletionsOnDate(roomId, taskIndex) {
-                    const baseKey = roomId + "-" + freq + "-" + taskIndex;
-                    const found = [];
-                    Object.entries(completions).forEach(([k, c]) => {
-                      if (!c || !c.at) return;
-                      if (!k.startsWith(baseKey)) return;
-                      if (new Date(c.at).toDateString() !== selDateStr) return;
-                      const completer = FAMILY.find(f => f.id === c.by);
-                      found.push({ key: k, c, member: completer });
-                    });
-                    return found;
-                  }
-
-                  function isCheckedByMember(roomId, taskIndex, memberId) {
-                    const baseKey = roomId + "-" + freq + "-" + taskIndex;
-                    // Check shared key and member-specific key
-                    const keys = [baseKey, baseKey + "-" + memberId];
-                    return keys.find(k => {
-                      const c = completions[k];
-                      return c && c.at && new Date(c.at).toDateString() === selDateStr && c.by === memberId;
-                    }) || null;
-                  }
-
-                  // Build a flat list of all daily tasks across all rooms, deduplicated
-                  const allDailyTasks = [];
-                  allRooms.forEach(room => {
-                    const tasks = getTaskList(room.id, freq);
-                    tasks.forEach((task, i) => {
-                      allDailyTasks.push({ room, task, taskIndex: i });
-                    });
+                  // Determine which frequencies apply to this day
+                  // Daily: every day. Weekly: if day is in current week. Monthly: any day this month. Quarterly/Annually: any day this year.
+                  const now2 = new Date();
+                  const relevantFreqs = frequencies.filter(freq => {
+                    const pk = getPeriodKey(freq, selDate);
+                    const pkNow = getPeriodKey(freq, now2);
+                    // Show freq if selected day falls in current or recent period for that freq
+                    if (freq === "Daily") return true;
+                    if (freq === "Weekly") {
+                      // Same week as selDate
+                      const wDay = selDate.getDay();
+                      const wSun = new Date(selDate); wSun.setDate(selDate.getDate() - wDay); wSun.setHours(0,0,0,0);
+                      const wSat = new Date(wSun); wSat.setDate(wSun.getDate() + 6); wSat.setHours(23,59,59,999);
+                      return selTs >= wSun.getTime() && selTs <= wSat.getTime();
+                    }
+                    if (freq === "Monthly") {
+                      return selDate.getMonth() === now2.getMonth() && selDate.getFullYear() === now2.getFullYear();
+                    }
+                    // Quarterly/Annually — only show for current quarter/year
+                    return pk === pkNow;
                   });
 
-                  // Determine which family members are relevant for each task
+                  // Build a unified completions lookup that includes both live and archive data
+                  // Key → completion object
+                  const allCompletions = {};
+                  // Archive first (lower priority)
+                  Object.values(allArchiveData).forEach(d => {
+                    Object.entries(d).forEach(([k, c]) => { if (c && c.at) allCompletions[k] = c; });
+                  });
+                  // Live completions override (higher priority)
+                  Object.entries(completions).forEach(([k, c]) => { if (c && c.at) allCompletions[k] = c; });
+
+                  function isCheckedByMember(roomId, freq, taskIndex, memberId) {
+                    const baseKey = roomId + "-" + freq + "-" + taskIndex;
+                    const memberKey = baseKey + "-" + memberId;
+                    // Check member-specific key first, then shared key
+                    for (const k of [memberKey, baseKey]) {
+                      const c = allCompletions[k];
+                      if (c && c.at && new Date(c.at).toDateString() === selDateStr && c.by === memberId) return k;
+                    }
+                    return null;
+                  }
+
+                  function toggleBackdate(roomId, freq, taskIndex, member, isCurrentlyDone, doneKey) {
+                    const baseKey = roomId + "-" + freq + "-" + taskIndex;
+                    const memberKey = member.isKid ? baseKey + "-" + member.id : baseKey;
+
+                    if (isCurrentlyDone && doneKey) {
+                      // Remove completion — from live completions
+                      setCompletions(prev => {
+                        const next = { ...prev };
+                        delete next[doneKey];
+                        saveCompletions(next);
+                        return next;
+                      });
+                    } else {
+                      // Add completion with the correct backdated timestamp
+                      // Use noon on the selected day so it falls squarely within that period
+                      const noon = new Date(selDate); noon.setHours(12, 0, 0, 0);
+                      const entry = {
+                        by: member.id, name: member.name, color: member.color,
+                        at: noon.getTime(),
+                        freq,
+                        periodKey: getPeriodKey(freq, noon),
+                        baseKey,
+                      };
+                      setCompletions(prev => {
+                        const next = { ...prev, [memberKey]: entry };
+                        saveCompletions(next);
+                        return next;
+                      });
+                    }
+                  }
+
                   function getRelevantMembers(task, roomId) {
                     const nameTag = task.text.match(/\((\w+)\)$/);
                     return FAMILY.filter(member => {
                       if (nameTag) return nameTag[1].toLowerCase() === member.name.toLowerCase();
-                      if (member.isKid) {
-                        return roomId === member.ownRoomId || (task.assignees||[]).includes(member.id);
-                      }
-                      return true; // adults see all
+                      if (member.isKid) return roomId === member.ownRoomId || (task.assignees || []).includes(member.id);
+                      return true;
                     });
                   }
 
-                  // Group tasks by room for display
+                  // Build tasks grouped by room, filtered to relevant frequencies
                   const tasksByRoom = {};
-                  allDailyTasks.forEach(({ room, task, taskIndex }) => {
-                    const relevant = getRelevantMembers(task, room.id);
-                    if (relevant.length === 0) return;
-                    if (!tasksByRoom[room.id]) tasksByRoom[room.id] = { room, tasks: [] };
-                    tasksByRoom[room.id].tasks.push({ task, taskIndex, relevant });
+                  relevantFreqs.forEach(freq => {
+                    allRooms.forEach(room => {
+                      const tasks = getTaskList(room.id, freq);
+                      if (tasks.length === 0) return;
+                      if (!tasksByRoom[room.id]) {
+                        const level = levels.find(l => l.rooms.some(r => r.id === room.id));
+                        tasksByRoom[room.id] = { room, level, freqGroups: {} };
+                      }
+                      tasksByRoom[room.id].freqGroups[freq] = tasks;
+                    });
                   });
+
+                  if (Object.keys(tasksByRoom).length === 0) {
+                    return <p style={{ fontSize: 12, color: "#CCC", fontStyle: "italic", textAlign: "center", padding: "20px 0" }}>No tasks found for this day.</p>;
+                  }
 
                   return (
                     <div>
-                      {Object.values(tasksByRoom).map(({ room, tasks }) => {
-                        const level = levels.find(l => l.rooms.some(r => r.id === room.id));
-                        return (
-                          <div key={room.id} style={{ marginBottom: 14, background: "#fff", borderRadius: 12, border: "1px solid #E4E0D8", overflow: "hidden" }}>
-                            {/* Room header */}
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: (level?.color || "#888") + "12", borderBottom: "1px solid #F0EDE6" }}>
-                              <RoomIcon icon={room.icon} size={15} />
-                              <span style={{ fontSize: 12, fontWeight: "bold", color: "#1A1A1A" }}>{room.name}</span>
-                              {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold", marginLeft: 2 }}>{level.label}</span>}
-                            </div>
-
-                            {tasks.map(({ task, taskIndex, relevant }, idx) => {
-                              const allDone = getAllCompletionsOnDate(room.id, taskIndex);
-                              const anyDone = allDone.length > 0;
-
-                              return (
-                                <div key={taskIndex} style={{ padding: "10px 14px", borderTop: idx > 0 ? "1px solid #F5F2EC" : "none" }}>
-                                  {/* Task name + time */}
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: relevant.length > 1 || anyDone ? 8 : 0 }}>
-                                    <div style={{ flex: 1, minWidth: 0 }}>
-                                      <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A" }}>{task.text}</p>
-                                      <p style={{ margin: "2px 0 0", fontSize: 10, color: "#BBB" }}>{room.name}{task.time ? " · ~" + task.time : ""}</p>
-                                    </div>
-                                  </div>
-
-                                  {/* Per-member completion rows */}
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                                    {relevant.map(member => {
-                                      const matchKey = isCheckedByMember(room.id, taskIndex, member.id);
-                                      const done = !!matchKey;
-                                      const completion = matchKey ? completions[matchKey] : null;
-                                      const completedBy = completion ? FAMILY.find(f => f.id === completion.by) : null;
-
-                                      return (
-                                        <div key={member.id} onClick={() => {
-                                          if (done) {
-                                            setCompletions(prev => { const next = {...prev}; delete next[matchKey]; saveCompletions(next); return next; });
-                                          } else {
-                                            backdateToggle(room.id, freq, taskIndex, member.id, selTs);
-                                          }
-                                        }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: done ? member.color + "10" : "#F9F8F6", cursor: "pointer", border: "1px solid " + (done ? member.color + "33" : "#ECEAE3") }}>
-                                          {/* Checkbox */}
-                                          <div style={{ width: 18, height: 18, borderRadius: "50%", border: "2px solid " + (done ? member.color : "#CCC"), background: done ? member.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                                            {done && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                                          </div>
-                                          {/* Assigned to */}
-                                          <Avatar member={member} size={20} fontSize={9} />
-                                          <span style={{ fontSize: 11, color: done ? member.color : "#888", fontWeight: done ? "bold" : "normal", flex: 1 }}>{member.name}</span>
-                                          {/* Who actually did it + when */}
-                                          {done && completedBy && (
-                                            <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                              {completedBy.id !== member.id && (
-                                                <>
-                                                  <span style={{ fontSize: 9, color: "#AAA" }}>by</span>
-                                                  <Avatar member={completedBy} size={16} fontSize={7} />
-                                                  <span style={{ fontSize: 9, color: completedBy.color, fontWeight: "bold" }}>{completedBy.name}</span>
-                                                </>
-                                              )}
-                                              <span style={{ fontSize: 9, color: "#CCC" }}>{fmt(completion.at)}</span>
-                                            </div>
-                                          )}
-                                          {!done && <span style={{ fontSize: 9, color: "#CCC", flexShrink: 0 }}>tap to mark done</span>}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                      {Object.values(tasksByRoom).map(({ room, level, freqGroups }) => (
+                        <div key={room.id} style={{ marginBottom: 12, background: "#fff", borderRadius: 12, border: "1px solid #E4E0D8", overflow: "hidden" }}>
+                          {/* Room header */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: (level?.color || "#888") + "12", borderBottom: "1px solid #F0EDE6" }}>
+                            <RoomIcon icon={room.icon} size={15} />
+                            <span style={{ fontSize: 12, fontWeight: "bold", color: "#1A1A1A" }}>{room.name}</span>
+                            {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold", marginLeft: 4 }}>{level.label}</span>}
                           </div>
-                        );
-                      })}
+
+                          {/* Tasks grouped by frequency */}
+                          {Object.entries(freqGroups).map(([freq, tasks]) => {
+                            const fmr = freqMeta[freq];
+                            return (
+                              <div key={freq}>
+                                {/* Freq label */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 14px", background: fmr.lightBg, borderTop: "1px solid " + fmr.border + "55" }}>
+                                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: fmr.dot }} />
+                                  <span style={{ fontSize: 9, fontWeight: "bold", color: fmr.text, textTransform: "uppercase", letterSpacing: "0.08em" }}>{freq}</span>
+                                </div>
+
+                                {tasks.map((task, taskIndex) => {
+                                  const relevant = getRelevantMembers(task, room.id);
+                                  if (relevant.length === 0) return null;
+
+                                  return (
+                                    <div key={taskIndex} style={{ padding: "10px 14px", borderTop: "1px solid #F8F6F2" }}>
+                                      {/* Task name */}
+                                      <div style={{ marginBottom: 7 }}>
+                                        <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A", fontWeight: "500" }}>{task.text}</p>
+                                        {task.time && <span style={{ fontSize: 10, color: "#AAA" }}>~{task.time}</span>}
+                                      </div>
+
+                                      {/* Per-member rows */}
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                        {relevant.map(member => {
+                                          const doneKey = isCheckedByMember(room.id, freq, taskIndex, member.id);
+                                          const done = !!doneKey;
+                                          const completion = doneKey ? (allCompletions[doneKey] || null) : null;
+                                          const completedBy = completion ? FAMILY.find(f => f.id === completion.by) : null;
+
+                                          return (
+                                            <div key={member.id}
+                                              onClick={() => toggleBackdate(room.id, freq, taskIndex, member, done, doneKey)}
+                                              style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, background: done ? member.color + "12" : "#F9F8F6", cursor: "pointer", border: "1px solid " + (done ? member.color + "44" : "#ECEAE3") }}>
+                                              {/* Checkbox */}
+                                              <div style={{ width: 18, height: 18, borderRadius: "50%", border: "2px solid " + (done ? member.color : "#CCC"), background: done ? member.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                                {done && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                              </div>
+                                              <Avatar member={member} size={20} fontSize={9} />
+                                              <span style={{ fontSize: 11, color: done ? member.color : "#888", fontWeight: done ? "bold" : "normal", flex: 1 }}>{member.name}</span>
+                                              {done && completion && (
+                                                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                                                  {completedBy && completedBy.id !== member.id && (
+                                                    <>
+                                                      <span style={{ fontSize: 9, color: "#AAA" }}>by</span>
+                                                      <Avatar member={completedBy} size={14} fontSize={7} />
+                                                      <span style={{ fontSize: 9, color: completedBy.color, fontWeight: "bold" }}>{completedBy.name}</span>
+                                                    </>
+                                                  )}
+                                                  <span style={{ fontSize: 9, color: "#CCC" }}>{fmt(completion.at)}</span>
+                                                </div>
+                                              )}
+                                              {!done && <span style={{ fontSize: 9, color: "#DDD", flexShrink: 0 }}>tap to add</span>}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
                     </div>
                   );
                 })()}
