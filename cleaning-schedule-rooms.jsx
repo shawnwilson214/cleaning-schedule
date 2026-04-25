@@ -1326,9 +1326,12 @@ export default function CleaningSchedule() {
               if (!taskObj) return;
               const pts = taskPoints(taskObj);
               const baseKey = room.id + "-" + c.freq + "-" + taskIndex;
-              if (details[c.by].find(d => d.baseKey === baseKey)) return;
+              // Deduplicate: same task on same calendar day counts once per kid
+              // Use periodKey (which encodes the specific day/week/month) as the scope
+              const dedupeKey = baseKey + "|" + (c.periodKey || String(c.at));
+              if (details[c.by].find(d => d.dedupeKey === dedupeKey)) return;
               points[c.by] = (points[c.by] || 0) + pts;
-              details[c.by].push({ baseKey, task: taskObj.text, room: room.name, roomIcon: room.icon, freq: c.freq, pts, time: taskObj.time, at: c.at });
+              details[c.by].push({ baseKey, dedupeKey, task: taskObj.text, room: room.name, roomIcon: room.icon, freq: c.freq, pts, time: taskObj.time, at: c.at });
             });
           }
           scan(completions);
@@ -1354,6 +1357,7 @@ export default function CleaningSchedule() {
         const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
         const dailyPts = {};
         kids.forEach(k => { dailyPts[k.id] = Array(7).fill(0); });
+        const seenDaily = new Set();
         function scanDaily(obj) {
           Object.entries(obj).forEach(([key, c]) => {
             if (!c || !c.at || !c.by || !c.freq) return;
@@ -1365,7 +1369,11 @@ export default function CleaningSchedule() {
             const taskList = getTaskList(room.id, c.freq);
             const taskObj = taskList[taskIndex];
             if (!taskObj) return;
-            dailyPts[c.by][new Date(c.at).getDay()] += taskPoints(taskObj);
+            const dayIdx = new Date(c.at).getDay();
+            const dedupeKey = c.by + "|" + room.id + "-" + c.freq + "-" + taskIndex + "|" + dayIdx;
+            if (seenDaily.has(dedupeKey)) return;
+            seenDaily.add(dedupeKey);
+            dailyPts[c.by][dayIdx] += taskPoints(taskObj);
           });
         }
         scanDaily(completions);
