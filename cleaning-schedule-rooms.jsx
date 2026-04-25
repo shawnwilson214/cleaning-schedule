@@ -2445,72 +2445,102 @@ export default function CleaningSchedule() {
                   return (
                     <div>
                       {Object.values(tasksByRoom).map(({ room, level, freqGroups }) => (
-                        <div key={room.id} style={{ marginBottom: 12, background: "#fff", borderRadius: 12, border: "1px solid #E4E0D8", overflow: "hidden" }}>
-                          {/* Room header */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: (level?.color || "#888") + "12", borderBottom: "1px solid #F0EDE6" }}>
-                            <RoomIcon icon={room.icon} size={15} />
-                            <span style={{ fontSize: 12, fontWeight: "bold", color: "#1A1A1A" }}>{room.name}</span>
-                            {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold", marginLeft: 4 }}>{level.label}</span>}
-                          </div>
-
-                          {/* Tasks grouped by frequency */}
+                        <div key={room.id} style={{ marginBottom: 10 }}>
                           {Object.entries(freqGroups).map(([freq, tasks]) => {
                             const fmr = freqMeta[freq];
+                            // Filter to tasks that have at least one relevant member
+                            const visibleTasks = tasks.filter(task => getRelevantMembers(task, room.id).length > 0);
+                            if (visibleTasks.length === 0) return null;
                             return (
-                              <div key={freq}>
-                                {/* Freq label */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 14px", background: fmr.lightBg, borderTop: "1px solid " + fmr.border + "55" }}>
-                                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: fmr.dot }} />
-                                  <span style={{ fontSize: 9, fontWeight: "bold", color: fmr.text, textTransform: "uppercase", letterSpacing: "0.08em" }}>{freq}</span>
+                              <div key={freq} style={{ borderRadius: 10, overflow: "hidden", border: "1px solid " + fmr.border, marginBottom: 8 }}>
+                                {/* Room + freq header */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: fmr.bg }}>
+                                  <RoomIcon icon={room.icon} size={15} />
+                                  <span style={{ fontSize: 12, fontWeight: "bold", color: fmr.text, flex: 1 }}>{room.name}</span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                    <div style={{ width: 6, height: 6, borderRadius: "50%", background: fmr.dot }} />
+                                    <span style={{ fontSize: 9, fontWeight: "bold", color: fmr.text, textTransform: "uppercase", letterSpacing: "0.08em" }}>{freq}</span>
+                                  </div>
+                                  {level && <span style={{ fontSize: 9, color: level.color, fontWeight: "bold" }}>{level.label}</span>}
                                 </div>
 
-                                {tasks.map((task, taskIndex) => {
+                                {/* Task rows — styled exactly like the tasks view */}
+                                {visibleTasks.map((task, taskIndex) => {
                                   const relevant = getRelevantMembers(task, room.id);
-                                  if (relevant.length === 0) return null;
+                                  const isMultiPerson = relevant.length > 1;
+
+                                  if (isMultiPerson) {
+                                    // Per-person rows for name-tagged / multi-assigned tasks
+                                    return (
+                                      <div key={taskIndex} style={{ borderTop: "1px solid " + fmr.border, background: fmr.lightBg, padding: "10px 14px" }}>
+                                        <div style={{ marginBottom: 7 }}>
+                                          <span style={{ fontSize: 13, color: fmr.text }}>{task.text}</span>
+                                          {task.time && <span style={{ fontSize: 9, color: "#AAA", background: "#F5F2EC", padding: "1px 6px", borderRadius: 6, marginLeft: 6 }}>~{task.time}</span>}
+                                        </div>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                          {relevant.map(member => {
+                                            const doneKey = isCheckedByMember(room.id, freq, taskIndex, member.id);
+                                            const done = !!doneKey;
+                                            const completion = doneKey ? allCompletions[doneKey] : null;
+                                            const completedBy = completion ? FAMILY.find(f => f.id === completion.by) : null;
+                                            return (
+                                              <div key={member.id}
+                                                onClick={() => toggleBackdate(room.id, freq, taskIndex, member, done, doneKey)}
+                                                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 8, background: done ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.4)", cursor: "pointer" }}>
+                                                <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid " + (done ? member.color : "#CCC"), background: done ? member.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                                  {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                                                </div>
+                                                <Avatar member={member} size={22} fontSize={10} />
+                                                <span style={{ fontSize: 12, color: done ? "#AAA" : "#555", textDecoration: done ? "line-through" : "none", flex: 1 }}>{member.name}</span>
+                                                {done && completedBy && (
+                                                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                                                    {completedBy.id !== member.id && (
+                                                      <><Avatar member={completedBy} size={18} fontSize={8} /><span style={{ fontSize: 9, color: completedBy.color, fontWeight: "bold" }}>{completedBy.name}</span></>
+                                                    )}
+                                                    <span style={{ fontSize: 9, color: "#CCC" }}>{fmt(completion.at)}</span>
+                                                  </div>
+                                                )}
+                                                {!done && <span style={{ fontSize: 9, color: "#CCC" }}>not done</span>}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  // Single-person task — styled exactly like TaskRow
+                                  const member = relevant[0];
+                                  const doneKey = isCheckedByMember(room.id, freq, taskIndex, member.id);
+                                  const done = !!doneKey;
+                                  const completion = doneKey ? allCompletions[doneKey] : null;
+                                  const completedBy = completion ? FAMILY.find(f => f.id === completion.by) : null;
+                                  const isLast = taskIndex === visibleTasks.length - 1;
 
                                   return (
-                                    <div key={taskIndex} style={{ padding: "10px 14px", borderTop: "1px solid #F8F6F2" }}>
-                                      {/* Task name */}
-                                      <div style={{ marginBottom: 7 }}>
-                                        <p style={{ margin: 0, fontSize: 12, color: "#1A1A1A", fontWeight: "500" }}>{task.text}</p>
-                                        {task.time && <span style={{ fontSize: 10, color: "#AAA" }}>~{task.time}</span>}
+                                    <div key={taskIndex}
+                                      onClick={() => toggleBackdate(room.id, freq, taskIndex, member, done, doneKey)}
+                                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderTop: "1px solid " + fmr.border, cursor: "pointer", background: done ? "rgba(255,255,255,0.6)" : fmr.lightBg }}>
+                                      {/* Circle checkbox */}
+                                      <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, border: "2px solid " + (done ? (completedBy?.color || member.color) : "#CCC"), background: done ? (completedBy?.color || member.color) : "transparent", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                        {done && <svg width="9" height="7" viewBox="0 0 9 7" fill="none"><path d="M1 3.5L3.2 6L8 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                                       </div>
-
-                                      {/* Per-member rows */}
-                                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                                        {relevant.map(member => {
-                                          const doneKey = isCheckedByMember(room.id, freq, taskIndex, member.id);
-                                          const done = !!doneKey;
-                                          const completion = doneKey ? (allCompletions[doneKey] || null) : null;
-                                          const completedBy = completion ? FAMILY.find(f => f.id === completion.by) : null;
-
-                                          return (
-                                            <div key={member.id}
-                                              onClick={() => toggleBackdate(room.id, freq, taskIndex, member, done, doneKey)}
-                                              style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, background: done ? member.color + "12" : "#F9F8F6", cursor: "pointer", border: "1px solid " + (done ? member.color + "44" : "#ECEAE3") }}>
-                                              {/* Checkbox */}
-                                              <div style={{ width: 18, height: 18, borderRadius: "50%", border: "2px solid " + (done ? member.color : "#CCC"), background: done ? member.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                                                {done && <svg width="8" height="6" viewBox="0 0 8 6" fill="none"><path d="M1 3L3 5L7 1" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                                              </div>
-                                              <Avatar member={member} size={20} fontSize={9} />
-                                              <span style={{ fontSize: 11, color: done ? member.color : "#888", fontWeight: done ? "bold" : "normal", flex: 1 }}>{member.name}</span>
-                                              {done && completion && (
-                                                <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                                                  {completedBy && completedBy.id !== member.id && (
-                                                    <>
-                                                      <span style={{ fontSize: 9, color: "#AAA" }}>by</span>
-                                                      <Avatar member={completedBy} size={14} fontSize={7} />
-                                                      <span style={{ fontSize: 9, color: completedBy.color, fontWeight: "bold" }}>{completedBy.name}</span>
-                                                    </>
-                                                  )}
-                                                  <span style={{ fontSize: 9, color: "#CCC" }}>{fmt(completion.at)}</span>
-                                                </div>
-                                              )}
-                                              {!done && <span style={{ fontSize: 9, color: "#DDD", flexShrink: 0 }}>tap to add</span>}
-                                            </div>
-                                          );
-                                        })}
+                                      {/* Task text + time */}
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <span style={{ fontSize: 13, color: done ? "#AAA" : fmr.text, textDecoration: done ? "line-through" : "none" }}>{task.text}</span>
+                                        {task.time && <div><span style={{ fontSize: 9, color: done ? "#CCC" : "#AAA", background: "#F5F2EC", padding: "1px 6px", borderRadius: 6, marginTop: 3, display: "inline-block" }}>~{task.time}</span></div>}
                                       </div>
+                                      {/* Completer avatar + time — shown when done */}
+                                      {done && completedBy && (
+                                        <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                                          <Avatar member={completedBy} size={24} fontSize={11} />
+                                          <div style={{ textAlign: "right" }}>
+                                            <p style={{ margin: 0, fontSize: 10, color: completedBy.color, fontWeight: "bold", lineHeight: 1.2 }}>{completedBy.name}</p>
+                                            <p style={{ margin: 0, fontSize: 9, color: "#CCC", lineHeight: 1.2 }}>{fmt(completion.at)}</p>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {!done && <span style={{ fontSize: 9, color: "#CCC", flexShrink: 0 }}>tap to mark done</span>}
                                     </div>
                                   );
                                 })}
