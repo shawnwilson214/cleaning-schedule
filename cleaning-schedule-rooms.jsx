@@ -1413,7 +1413,7 @@ export default function CleaningSchedule() {
         function countPoints(from, to) {
           const points = {}, details = {};
           kids.forEach(k => { points[k.id] = 0; details[k.id] = []; });
-          function scan(obj) {
+          const scan = (obj) => {
             Object.entries(obj).forEach(([key, c]) => {
               if (!c || !c.at || !c.by || !c.freq) return;
               if (!kids.find(k => k.id === c.by)) return;
@@ -1782,6 +1782,7 @@ export default function CleaningSchedule() {
 
                   {/* Manual adjustment — adults only */}
                   {!isKidMode && (
+                  <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
                     <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>Manual Adjustment</p>
                     <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                       <input type="number" min="0" step="0.50" value={adjAmounts[kid.id] || ""} onChange={e => setAdjAmounts(prev => ({ ...prev, [kid.id]: e.target.value }))} placeholder="$0.00" style={{ ...inSt, width: 80 }} />
@@ -2372,7 +2373,7 @@ export default function CleaningSchedule() {
                   // Live completions override (higher priority)
                   Object.entries(completions).forEach(([k, c]) => { if (c && c.at) allCompletions[k] = c; });
 
-                  function isCheckedByMember(roomId, freq, taskIndex, memberId) {
+                  const isCheckedByMember = (roomId, freq, taskIndex, memberId) => {
                     const baseKey = roomId + "-" + freq + "-" + taskIndex;
                     const memberKey = baseKey + "-" + memberId;
                     // Check member-specific key first, then shared key
@@ -2383,7 +2384,7 @@ export default function CleaningSchedule() {
                     return null;
                   }
 
-                  function toggleBackdate(roomId, freq, taskIndex, member, isCurrentlyDone, doneKey) {
+                  const toggleBackdate = (roomId, freq, taskIndex, member, isCurrentlyDone, doneKey) => {
                     const baseKey = roomId + "-" + freq + "-" + taskIndex;
                     const memberKey = member.isKid ? baseKey + "-" + member.id : baseKey;
 
@@ -2414,7 +2415,7 @@ export default function CleaningSchedule() {
                     }
                   }
 
-                  function getRelevantMembers(task, roomId) {
+                  const getRelevantMembers = (task, roomId) => {
                     const nameTag = task.text.match(/\((\w+)\)$/);
                     return FAMILY.filter(member => {
                       if (nameTag) return nameTag[1].toLowerCase() === member.name.toLowerCase();
