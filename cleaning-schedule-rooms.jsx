@@ -769,6 +769,60 @@ function StatusView({ completions, getTaskList, allRooms, levels, expandedCard, 
 export default function CleaningSchedule() {
   const [activeFreq, setActiveFreq] = useState("Daily");
   const [activeMember, setActiveMember] = useState(FAMILY[0]);
+  const [haUserDetected, setHaUserDetected] = useState(false);
+
+  // Detect Home Assistant logged-in user and auto-select matching FAMILY member.
+  // Works when the app is loaded inside a HA dashboard iframe or panel.
+  // Parents (Dad/Mom) keep full access. Unrecognized users default to Dad.
+  useEffect(() => {
+    async function detectHAUser() {
+      try {
+        // HA exposes the current user via its auth API
+        // Try the HA JS API first (available in custom panels)
+        if (window.hassConnection) {
+          const conn = await window.hassConnection;
+          const user = await conn.sendMessagePromise({ type: "auth/current_user" });
+          matchHAUser(user?.name || user?.username || "");
+          return;
+        }
+        // Fallback: try fetching from HA REST API (works if app is on same origin)
+        const res = await fetch("/auth/current_user", { credentials: "include" });
+        if (res.ok) {
+          const user = await res.json();
+          matchHAUser(user?.name || user?.username || "");
+          return;
+        }
+        // Also try parent window message (iframe approach)
+        window.parent.postMessage({ type: "get_current_user" }, "*");
+        const handler = (e) => {
+          if (e.data?.type === "current_user_response" && e.data?.user) {
+            matchHAUser(e.data.user.name || e.data.user.username || "");
+            window.removeEventListener("message", handler);
+          }
+        };
+        window.addEventListener("message", handler);
+        // Clean up listener after 3s if no response
+        setTimeout(() => window.removeEventListener("message", handler), 3000);
+      } catch (_) {
+        // Not in HA or detection failed — leave default (Dad)
+      }
+      setHaUserDetected(true);
+    }
+
+    function matchHAUser(nameOrUsername) {
+      if (!nameOrUsername) return;
+      const lower = nameOrUsername.toLowerCase().trim();
+      // Match HA username/name to FAMILY member by first name
+      const match = FAMILY.find(m => lower.includes(m.name.toLowerCase()) || m.name.toLowerCase() === lower || m.id === lower);
+      if (match) {
+        setActiveMember(match);
+      }
+      // If no match found, leave as Dad (full access)
+      setHaUserDetected(true);
+    }
+
+    detectHAUser();
+  }, []);
   const [completions, setCompletions] = useState({});
   const [collapsed, setCollapsed] = useState({});
   const [loading, setLoading] = useState(true);
@@ -807,6 +861,9 @@ export default function CleaningSchedule() {
   const [adjAmounts, setAdjAmounts] = useState({});
   const [adjNotes, setAdjNotes] = useState({});
   const [historyExpanded, setHistoryExpanded] = useState({});
+  const [notifyConfig, setNotifyConfig] = useState(null); // loaded from Firebase
+  const [notifyConfigLoaded, setNotifyConfigLoaded] = useState(false);
+  const [notifyTestStatus, setNotifyTestStatus] = useState({});
 
   const writingRef = useRef(false);
   const isKidMode = activeMember.isKid;
@@ -972,6 +1029,93 @@ export default function CleaningSchedule() {
     });
     return () => unsub();
   }, []);
+
+  // Load notification config from Firebase
+  useEffect(() => {
+    const unsub = dbListen("notifyConfig", (result) => {
+      if (result?.value) setNotifyConfig(JSON.parse(result.value));
+      else setNotifyConfig({
+        haToken: "",
+        haUrl: window.location.origin.includes("localhost") ? "http://homeassistant.local:8123" : window.location.origin,
+        kids: {
+          zach:  { enabled: false, kidTarget: "", parentTarget: "", notifyKid: false, notifyParent: true, time: "19:00", days: [0,1,2,3,4,5,6] },
+          kyle:  { enabled: false, kidTarget: "", parentTarget: "", notifyKid: false, notifyParent: true, time: "19:00", days: [0,1,2,3,4,5,6] },
+        },
+        sentToday: {},
+      });
+      setNotifyConfigLoaded(true);
+    });
+    return () => unsub();
+  }, []);
+
+  const saveNotifyConfig = async (cfg) => {
+    setNotifyConfig(cfg);
+    await dbSet("notifyConfig", JSON.stringify(cfg));
+  };
+
+  // Background notification check — runs every 60 seconds
+  useEffect(() => {
+    if (!notifyConfigLoaded || !notifyConfig?.haToken) return;
+
+    const check = async () => {
+      const now = new Date();
+      const todayKey = getPeriodKey("Daily");
+      const dayOfWeek = now.getDay();
+      const hhmm = String(now.getHours()).padStart(2,"0") + ":" + String(now.getMinutes()).padStart(2,"0");
+
+      const allowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
+      for (const kid of allowanceKids) {
+        const cfg = notifyConfig.kids?.[kid.id];
+        if (!cfg?.enabled) continue;
+        if (!cfg.days.includes(dayOfWeek)) continue;
+        if (hhmm !== cfg.time) continue;
+
+        // Already sent today?
+        const sentKey = kid.id + "-" + todayKey;
+        if (notifyConfig.sentToday?.[sentKey]) continue;
+
+        // Check incomplete tasks
+        const incomplete = [];
+        allRooms.forEach(room => {
+          const tasks = getTaskList(room.id, "Daily");
+          tasks.forEach((task, i) => {
+            const nameTag = task.text.match(/\((\w+)\)$/);
+            if (nameTag && nameTag[1].toLowerCase() !== kid.name.toLowerCase()) return;
+            if (!nameTag && !(room.id === kid.ownRoomId || (task.assignees||[]).includes(kid.id))) return;
+            const baseKey = room.id + "-Daily-" + i;
+            const kidKey = baseKey + "-" + kid.id;
+            if (!completions[kidKey] && !completions[baseKey]) {
+              incomplete.push(task.text.replace(/\s*\(\w+\)$/, ""));
+            }
+          });
+        });
+
+        if (incomplete.length === 0) continue;
+
+        // Send notification(s)
+        const message = kid.name + " has " + incomplete.length + " daily task" + (incomplete.length === 1 ? "" : "s") + " not done:\n• " + incomplete.slice(0, 5).join("\n• ") + (incomplete.length > 5 ? "\n• +" + (incomplete.length - 5) + " more" : "");
+        const haBase = (cfg.haUrl || notifyConfig.haUrl || "").replace(/\/$/, "");
+        const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + notifyConfig.haToken };
+        const body = JSON.stringify({ message, title: "Chores Reminder 🧹" });
+
+        try {
+          if (cfg.notifyKid && cfg.kidTarget) {
+            await fetch(haBase + "/api/services/notify/" + cfg.kidTarget.replace("notify.", ""), { method: "POST", headers, body });
+          }
+          if (cfg.notifyParent && cfg.parentTarget) {
+            await fetch(haBase + "/api/services/notify/" + cfg.parentTarget.replace("notify.", ""), { method: "POST", headers, body });
+          }
+          // Mark as sent
+          const updated = { ...notifyConfig, sentToday: { ...(notifyConfig.sentToday || {}), [sentKey]: Date.now() } };
+          saveNotifyConfig(updated);
+        } catch (_) {}
+      }
+    };
+
+    check();
+    const interval = setInterval(check, 60000);
+    return () => clearInterval(interval);
+  }, [notifyConfig, notifyConfigLoaded, completions]);
 
   // Recalculate allowance whenever completions change.
   // For each kid, for each of the past 7 days:
@@ -1328,7 +1472,7 @@ export default function CleaningSchedule() {
 
   const tabs = isKidMode
     ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["allowance","Allowance"]]
-    : [["tasks","Tasks"],["status","Status"],["leaderboard","Leaderboard"],["allowance","Allowance"],["history","History"],["edit","Edit"]];
+    : [["tasks","Tasks"],["status","Status"],["leaderboard","Leaderboard"],["allowance","Allowance"],["history","History"],["edit","Edit"],["notify","Notify"]];
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }} key={activeMember.id}>
@@ -2554,6 +2698,173 @@ export default function CleaningSchedule() {
                 })()}
               </div>
             )}
+          </div>
+        );
+      })()}
+
+
+      {/* ═══ NOTIFY VIEW (adults only) ═══ */}
+      {view === "notify" && !isKidMode && (() => {
+        if (!notifyConfigLoaded) return <div style={{ padding: 20, color: "#AAA", fontFamily: "Georgia, serif" }}>Loading...</div>;
+
+        const cfg = notifyConfig || {};
+        const kidsCfg = cfg.kids || {};
+        const notifyKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
+        const dayLabels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+        const inSt = { fontSize: 13, padding: "7px 10px", border: "1px solid #DDD8CE", borderRadius: 8, fontFamily: "inherit", background: "#fff", boxSizing: "border-box", width: "100%" };
+        const lbSt = { fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 4 };
+
+        const updateKid = (kidId, field, value) => {
+          const updated = { ...cfg, kids: { ...kidsCfg, [kidId]: { ...(kidsCfg[kidId]||{}), [field]: value } } };
+          saveNotifyConfig(updated);
+        };
+
+        const toggleDay = (kidId, day) => {
+          const days = kidsCfg[kidId]?.days || [0,1,2,3,4,5,6];
+          const next = days.includes(day) ? days.filter(d => d !== day) : [...days, day].sort();
+          updateKid(kidId, "days", next);
+        };
+
+        const sendTest = async (kidId) => {
+          const k = kidsCfg[kidId] || {};
+          const kid = FAMILY.find(f => f.id === kidId);
+          const haBase = (k.haUrl || cfg.haUrl || "").replace(/\/$/, "");
+          const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + cfg.haToken };
+          const body = JSON.stringify({ message: "Test notification from Cleaning Schedule for " + kid?.name, title: "Chores Reminder 🧹" });
+          setNotifyTestStatus(p => ({ ...p, [kidId]: "sending" }));
+          try {
+            let sent = false;
+            if (k.notifyKid && k.kidTarget) {
+              await fetch(haBase + "/api/services/notify/" + k.kidTarget.replace("notify.",""), { method:"POST", headers, body });
+              sent = true;
+            }
+            if (k.notifyParent && k.parentTarget) {
+              await fetch(haBase + "/api/services/notify/" + k.parentTarget.replace("notify.",""), { method:"POST", headers, body });
+              sent = true;
+            }
+            setNotifyTestStatus(p => ({ ...p, [kidId]: sent ? "sent" : "no-target" }));
+          } catch (e) {
+            setNotifyTestStatus(p => ({ ...p, [kidId]: "error" }));
+          }
+          setTimeout(() => setNotifyTestStatus(p => ({ ...p, [kidId]: null })), 4000);
+        };
+
+        return (
+          <div style={{ paddingBottom: 60 }}>
+            <div style={{ padding: "14px 14px 8px" }}>
+              <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>Push Notifications</p>
+              <p style={{ margin: 0, fontSize: 11, color: "#AAA" }}>Send reminders via Home Assistant when tasks aren't done by a set time.</p>
+            </div>
+
+            {/* HA Connection */}
+            <div style={{ margin: "0 14px 16px", background: "#fff", borderRadius: 14, border: "1px solid #E4E0D8", padding: "14px" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 12, fontWeight: "bold", color: "#1A1A1A" }}>Home Assistant Connection</p>
+              <div style={{ marginBottom: 10 }}>
+                <label style={lbSt}>HA URL (e.g. http://homeassistant.local:8123)</label>
+                <input value={cfg.haUrl || ""} onChange={e => saveNotifyConfig({ ...cfg, haUrl: e.target.value })} placeholder="http://homeassistant.local:8123" style={inSt} />
+              </div>
+              <div>
+                <label style={lbSt}>Long-Lived Access Token</label>
+                <input type="password" value={cfg.haToken || ""} onChange={e => saveNotifyConfig({ ...cfg, haToken: e.target.value })} placeholder="Paste token from HA → Profile → Security" style={inSt} />
+              </div>
+              {cfg.haToken && (
+                <p style={{ margin: "8px 0 0", fontSize: 10, color: "#6DB894" }}>✓ Token saved</p>
+              )}
+              <div style={{ margin: "12px 0 0", padding: "10px 12px", background: "#F5F2EC", borderRadius: 8 }}>
+                <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: "bold", color: "#555" }}>How to get a token:</p>
+                <p style={{ margin: 0, fontSize: 10, color: "#888", lineHeight: 1.5 }}>In HA → click your profile (bottom left) → Security tab → scroll to Long-Lived Access Tokens → Create Token → copy and paste above.</p>
+              </div>
+            </div>
+
+            {/* Per-kid config */}
+            {notifyKids.map(kid => {
+              const k = kidsCfg[kid.id] || { enabled: false, kidTarget: "", parentTarget: "", notifyKid: false, notifyParent: true, time: "19:00", days: [0,1,2,3,4,5,6] };
+              const testStatus = notifyTestStatus[kid.id];
+              return (
+                <div key={kid.id} style={{ margin: "0 14px 14px", background: "#fff", borderRadius: 14, border: "2px solid " + kid.color + (k.enabled ? "88" : "33"), overflow: "hidden" }}>
+                  {/* Header + enable toggle */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: kid.color + (k.enabled ? "15" : "08") }}>
+                    <Avatar member={kid} size={28} fontSize={12} />
+                    <span style={{ fontSize: 13, fontWeight: "bold", color: kid.color, flex: 1 }}>{kid.name}</span>
+                    <button
+                      onClick={() => updateKid(kid.id, "enabled", !k.enabled)}
+                      style={{ padding: "5px 14px", borderRadius: 20, border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: "bold", background: k.enabled ? kid.color : "#DDD", color: k.enabled ? "#fff" : "#888" }}>
+                      {k.enabled ? "On" : "Off"}
+                    </button>
+                  </div>
+
+                  {k.enabled && (
+                    <div style={{ padding: "12px 14px" }}>
+                      {/* Reminder time */}
+                      <div style={{ marginBottom: 12 }}>
+                        <label style={lbSt}>Reminder Time</label>
+                        <input type="time" value={k.time || "19:00"} onChange={e => updateKid(kid.id, "time", e.target.value)} style={{ ...inSt, width: "auto" }} />
+                      </div>
+
+                      {/* Days */}
+                      <div style={{ marginBottom: 12 }}>
+                        <label style={lbSt}>Active Days</label>
+                        <div style={{ display: "flex", gap: 5 }}>
+                          {dayLabels.map((d, i) => {
+                            const active = (k.days || []).includes(i);
+                            return (
+                              <button key={i} onClick={() => toggleDay(kid.id, i)} style={{ flex: 1, padding: "5px 2px", borderRadius: 8, border: "1px solid " + (active ? kid.color : "#DDD"), background: active ? kid.color : "#fff", color: active ? "#fff" : "#888", cursor: "pointer", fontFamily: "inherit", fontSize: 10, fontWeight: active ? "bold" : "normal" }}>{d}</button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Who to notify */}
+                      <div style={{ marginBottom: 12 }}>
+                        <label style={lbSt}>Who to Notify</label>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          {[["notifyKid","Kid's device"],["notifyParent","Parent's device"]].map(([field, label]) => (
+                            <button key={field} onClick={() => updateKid(kid.id, field, !k[field])} style={{ flex: 1, padding: "7px", borderRadius: 8, border: "1px solid " + (k[field] ? kid.color : "#DDD"), background: k[field] ? kid.color + "15" : "#fff", color: k[field] ? kid.color : "#888", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: k[field] ? "bold" : "normal" }}>{label}</button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Notify targets */}
+                      {k.notifyKid && (
+                        <div style={{ marginBottom: 10 }}>
+                          <label style={lbSt}>Kid's HA Notify Service (e.g. mobile_app_zachs_phone)</label>
+                          <input value={k.kidTarget || ""} onChange={e => updateKid(kid.id, "kidTarget", e.target.value)} placeholder="mobile_app_zachs_phone" style={inSt} />
+                        </div>
+                      )}
+                      {k.notifyParent && (
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={lbSt}>Parent's HA Notify Service (e.g. mobile_app_dads_phone)</label>
+                          <input value={k.parentTarget || ""} onChange={e => updateKid(kid.id, "parentTarget", e.target.value)} placeholder="mobile_app_dads_phone" style={inSt} />
+                        </div>
+                      )}
+
+                      {/* Test button */}
+                      <button
+                        onClick={() => sendTest(kid.id)}
+                        disabled={testStatus === "sending"}
+                        style={{ width: "100%", padding: "9px", background: testStatus === "sent" ? "#6DB894" : testStatus === "error" ? "#D47F6B" : "#1A1A1A", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>
+                        {testStatus === "sending" ? "Sending..." : testStatus === "sent" ? "✓ Test Sent!" : testStatus === "error" ? "✗ Error — check URL & token" : testStatus === "no-target" ? "No target set" : "Send Test Notification"}
+                      </button>
+
+                      {/* Last sent info */}
+                      {notifyConfig?.sentToday?.[kid.id + "-" + getPeriodKey("Daily")] && (
+                        <p style={{ margin: "8px 0 0", fontSize: 10, color: "#AAA", textAlign: "center" }}>
+                          Reminder sent today at {fmt(notifyConfig.sentToday[kid.id + "-" + getPeriodKey("Daily")])}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            <div style={{ margin: "0 14px", padding: "12px 14px", background: "#F5F2EC", borderRadius: 12, border: "1px solid #E4E0D8" }}>
+              <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: "bold", color: "#555" }}>How to find your notify service name:</p>
+              <p style={{ margin: 0, fontSize: 10, color: "#888", lineHeight: 1.6 }}>
+                In HA → Developer Tools → Services → search "notify" → you'll see entries like <strong>notify.mobile_app_your_phone</strong>. Each phone with the HA Companion app installed has its own entry. Use just the part after "notify." in the field above.
+              </p>
+            </div>
           </div>
         );
       })()}
