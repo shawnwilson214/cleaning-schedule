@@ -771,57 +771,58 @@ export default function CleaningSchedule() {
   const [activeMember, setActiveMember] = useState(FAMILY[0]);
   const [haUserDetected, setHaUserDetected] = useState(false);
 
-  // Detect Home Assistant logged-in user and auto-select matching FAMILY member.
-  // Works when the app is loaded inside a HA dashboard iframe or panel.
-  // Parents (Dad/Mom) keep full access. Unrecognized users default to Dad.
+  // Auto-select family member. Priority:
+  // 1. URL param ?user=zach  (most reliable for HA iframes/webapps — set this in your HA dashboard URL)
+  // 2. HA JS API (custom panels)
+  // 3. HA REST API (same-origin)
+  // 4. postMessage (iframe)
+  // Falls back to Dad if nothing matches.
   useEffect(() => {
-    async function detectHAUser() {
+    function matchAndSet(nameOrId) {
+      if (!nameOrId) return false;
+      const lower = nameOrId.toLowerCase().trim();
+      const match = FAMILY.find(m =>
+        m.id === lower || m.name.toLowerCase() === lower || lower.includes(m.name.toLowerCase())
+      );
+      if (match) { setActiveMember(match); setHaUserDetected(true); return true; }
+      return false;
+    }
+
+    // 1. URL param — easiest for HA: set the app URL to https://yourapp.vercel.app?user=zach
+    const urlParam = new URLSearchParams(window.location.search).get("user");
+    if (urlParam && matchAndSet(urlParam)) return;
+
+    // 2–4. HA async detection
+    (async () => {
       try {
-        // HA exposes the current user via its auth API
-        // Try the HA JS API first (available in custom panels)
         if (window.hassConnection) {
           const conn = await window.hassConnection;
           const user = await conn.sendMessagePromise({ type: "auth/current_user" });
-          matchHAUser(user?.name || user?.username || "");
-          return;
+          if (matchAndSet(user?.name || user?.username || "")) return;
         }
-        // Fallback: try fetching from HA REST API (works if app is on same origin)
+      } catch (_) {}
+      try {
         const res = await fetch("/auth/current_user", { credentials: "include" });
         if (res.ok) {
-          const user = await res.json();
-          matchHAUser(user?.name || user?.username || "");
-          return;
+          const data = await res.json();
+          if (matchAndSet(data?.name || data?.username || "")) return;
         }
-        // Also try parent window message (iframe approach)
+      } catch (_) {}
+      try {
         window.parent.postMessage({ type: "get_current_user" }, "*");
-        const handler = (e) => {
-          if (e.data?.type === "current_user_response" && e.data?.user) {
-            matchHAUser(e.data.user.name || e.data.user.username || "");
-            window.removeEventListener("message", handler);
-          }
-        };
-        window.addEventListener("message", handler);
-        // Clean up listener after 3s if no response
-        setTimeout(() => window.removeEventListener("message", handler), 3000);
-      } catch (_) {
-        // Not in HA or detection failed — leave default (Dad)
-      }
+        await new Promise(resolve => {
+          const h = (e) => {
+            if (e.data?.type === "current_user_response" && e.data?.user) {
+              matchAndSet(e.data.user.name || e.data.user.username || "");
+              window.removeEventListener("message", h); resolve();
+            }
+          };
+          window.addEventListener("message", h);
+          setTimeout(() => { window.removeEventListener("message", h); resolve(); }, 2000);
+        });
+      } catch (_) {}
       setHaUserDetected(true);
-    }
-
-    function matchHAUser(nameOrUsername) {
-      if (!nameOrUsername) return;
-      const lower = nameOrUsername.toLowerCase().trim();
-      // Match HA username/name to FAMILY member by first name
-      const match = FAMILY.find(m => lower.includes(m.name.toLowerCase()) || m.name.toLowerCase() === lower || m.id === lower);
-      if (match) {
-        setActiveMember(match);
-      }
-      // If no match found, leave as Dad (full access)
-      setHaUserDetected(true);
-    }
-
-    detectHAUser();
+    })();
   }, []);
   const [completions, setCompletions] = useState({});
   const [collapsed, setCollapsed] = useState({});
@@ -1103,7 +1104,10 @@ export default function CleaningSchedule() {
             await fetch(haBase + "/api/services/notify/" + cfg.kidTarget.replace("notify.", ""), { method: "POST", headers, body });
           }
           if (cfg.notifyParent && cfg.parentTarget) {
-            await fetch(haBase + "/api/services/notify/" + cfg.parentTarget.replace("notify.", ""), { method: "POST", headers, body });
+            const parentTargets = cfg.parentTarget.split("\n").map(t => t.trim()).filter(Boolean);
+            for (const t of parentTargets) {
+              await fetch(haBase + "/api/services/notify/" + t.replace("notify.", ""), { method: "POST", headers, body });
+            }
           }
           // Mark as sent
           const updated = { ...notifyConfig, sentToday: { ...(notifyConfig.sentToday || {}), [sentKey]: Date.now() } };
@@ -2740,7 +2744,10 @@ export default function CleaningSchedule() {
               sent = true;
             }
             if (k.notifyParent && k.parentTarget) {
-              await fetch(haBase + "/api/services/notify/" + k.parentTarget.replace("notify.",""), { method:"POST", headers, body });
+              const parentTargets = k.parentTarget.split("\n").map(t => t.trim()).filter(Boolean);
+              for (const t of parentTargets) {
+                await fetch(haBase + "/api/services/notify/" + t.replace("notify.",""), { method:"POST", headers, body });
+              }
               sent = true;
             }
             setNotifyTestStatus(p => ({ ...p, [kidId]: sent ? "sent" : "no-target" }));
@@ -2834,8 +2841,15 @@ export default function CleaningSchedule() {
                       )}
                       {k.notifyParent && (
                         <div style={{ marginBottom: 12 }}>
-                          <label style={lbSt}>Parent's HA Notify Service (e.g. mobile_app_dads_phone)</label>
-                          <input value={k.parentTarget || ""} onChange={e => updateKid(kid.id, "parentTarget", e.target.value)} placeholder="mobile_app_dads_phone" style={inSt} />
+                          <label style={lbSt}>Parent Device(s) — one notify service per line</label>
+                          <textarea
+                            value={k.parentTarget || ""}
+                            onChange={e => updateKid(kid.id, "parentTarget", e.target.value)}
+                            placeholder={"mobile_app_dads_phone\nmobile_app_moms_phone"}
+                            rows={3}
+                            style={{ ...inSt, resize: "vertical", lineHeight: 1.5, fontFamily: "monospace", fontSize: 12 }}
+                          />
+                          <p style={{ margin: "3px 0 0", fontSize: 9, color: "#AAA" }}>Add one service name per line to notify multiple devices</p>
                         </div>
                       )}
 
