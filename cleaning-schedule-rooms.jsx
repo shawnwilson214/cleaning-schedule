@@ -592,7 +592,7 @@ const selectStyle = {
 const labelStyle = { fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 4px", display: "block" };
 
 // ─── STATUS VIEW COMPONENT ────────────────────────────────────────────────────
-function StatusView({ completions, getTaskList, allRooms, levels, expandedCard, setExpandedCard, Avatar, RoomIcon, FAMILY }) {
+function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels, expandedCard, setExpandedCard, Avatar, RoomIcon, FAMILY }) {
   const now = new Date();
 
   // Time boundaries
@@ -635,6 +635,49 @@ function StatusView({ completions, getTaskList, allRooms, levels, expandedCard, 
     }
   });
 
+  // ── 7-day rolling daily completion data ─────────────────────────────────
+  // Build per-day completion maps from both live + archive data
+  const sevenDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(now);
+    d.setDate(now.getDate() - (6 - i)); // oldest first
+    d.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(d); dayEnd.setHours(23, 59, 59, 999);
+    return { date: d, dayEnd, label: i === 6 ? "Today" : d.toLocaleDateString([], { weekday: "short" }), dateStr: d.toDateString() };
+  });
+
+  // Total daily tasks (same every day)
+  let dailyTotal = 0;
+  allRooms.forEach(room => { dailyTotal += getTaskList(room.id, "Daily").length; });
+
+  // Count completions per day across all sources
+  const dailyDoneCounts = sevenDays.map(() => new Set());
+
+  function scanForSevenDay(obj) {
+    Object.entries(obj).forEach(([key, c]) => {
+      if (!c || !c.at || c.freq !== "Daily") return;
+      const room = allRooms.find(r => key.startsWith(r.id + "-"));
+      if (!room) return;
+      const afterRoom = key.slice(room.id.length + 1);
+      const afterFreq = afterRoom.slice("Daily".length + 1);
+      const taskIndex = parseInt(afterFreq.split("-")[0]);
+      if (isNaN(taskIndex)) return;
+      const baseKey = room.id + "-Daily-" + taskIndex;
+      const cDate = new Date(c.at).toDateString();
+      sevenDays.forEach((day, i) => {
+        if (cDate === day.dateStr) dailyDoneCounts[i].add(baseKey);
+      });
+    });
+  }
+
+  scanForSevenDay(completions);
+  Object.values(allArchiveData || {}).forEach(d => scanForSevenDay(d));
+
+  const sevenDayData = sevenDays.map((day, i) => ({
+    ...day,
+    done: dailyDoneCounts[i].size,
+    pct: dailyTotal > 0 ? Math.min(100, Math.round(dailyDoneCounts[i].size / dailyTotal * 100)) : 0,
+  }));
+
   // Compute stats for a given set of frequencies
   function computeStats(freqList) {
     let total = 0, done = 0;
@@ -666,11 +709,11 @@ function StatusView({ completions, getTaskList, allRooms, levels, expandedCard, 
   }
 
   const freqCards = [
-    { id: "daily",     label: "Daily",     freq: ["Daily"],                        color: "#E8C547", period: now.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"}) },
-    { id: "weekly",    label: "Weekly",    freq: ["Weekly"],                       color: "#5B9BD5", period: weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric"}) },
-    { id: "monthly",   label: "Monthly",   freq: ["Monthly"],                      color: "#6DB894", period: now.toLocaleDateString([],{month:"long",year:"numeric"}) },
-    { id: "quarterly", label: "Quarterly", freq: ["Quarterly"],                    color: "#A67DC4", period: "Q"+Math.ceil((now.getMonth()+1)/3)+" "+now.getFullYear() },
-    { id: "annually",  label: "Annual",    freq: ["Annually"],                     color: "#D4445A", period: now.getFullYear().toString() },
+    { id: "daily",     label: "Daily",     freq: ["Daily"],     color: "#E8C547", period: now.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"}), sevenDayData },
+    { id: "weekly",    label: "Weekly",    freq: ["Weekly"],    color: "#5B9BD5", period: weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric"}) },
+    { id: "monthly",   label: "Monthly",   freq: ["Monthly"],   color: "#6DB894", period: now.toLocaleDateString([],{month:"long",year:"numeric"}) },
+    { id: "quarterly", label: "Quarterly", freq: ["Quarterly"], color: "#A67DC4", period: "Q"+Math.ceil((now.getMonth()+1)/3)+" "+now.getFullYear() },
+    { id: "annually",  label: "Annual",    freq: ["Annually"],  color: "#D4445A", period: now.getFullYear().toString() },
   ];
 
   return (
@@ -700,7 +743,49 @@ function StatusView({ completions, getTaskList, allRooms, levels, expandedCard, 
               <div style={{ height: 8, background: "#F0EDE6", borderRadius: 4, overflow: "hidden" }}>
                 <div style={{ height: "100%", width: pct + "%", background: card.color, borderRadius: 4, transition: "width 0.4s" }} />
               </div>
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+
+              {/* 7-day rolling chart — daily card only */}
+              {card.id === "daily" && card.sevenDayData && (
+                <div style={{ marginTop: 14 }}>
+                  <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>Last 7 Days</p>
+                  <div style={{ display: "flex", gap: 4, alignItems: "flex-end" }}>
+                    {card.sevenDayData.map((day, i) => {
+                      const isToday = i === 6;
+                      const isEmpty = day.pct === 0;
+                      const isFull = day.pct === 100;
+                      return (
+                        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                          {/* Percentage label */}
+                          <span style={{ fontSize: 9, fontWeight: "bold", color: isEmpty ? "#CCC" : isFull ? card.color : "#888" }}>
+                            {isEmpty ? "" : day.pct + "%"}
+                          </span>
+                          {/* Bar */}
+                          <div style={{ width: "100%", height: 48, background: "#F0EDE6", borderRadius: 5, overflow: "hidden", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                            <div style={{
+                              width: "100%",
+                              height: day.pct + "%",
+                              background: isFull ? card.color : isToday ? card.color + "AA" : card.color + "66",
+                              borderRadius: 5,
+                              transition: "height 0.4s",
+                              minHeight: day.pct > 0 ? 4 : 0,
+                            }} />
+                          </div>
+                          {/* Day label */}
+                          <span style={{ fontSize: 9, color: isToday ? "#1A1A1A" : "#AAA", fontWeight: isToday ? "bold" : "normal", whiteSpace: "nowrap" }}>
+                            {day.label}
+                          </span>
+                          {/* Done/total below label */}
+                          <span style={{ fontSize: 8, color: "#CCC" }}>
+                            {day.done}/{dailyTotal}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
                 <span style={{ fontSize: 10, color: isExpanded ? card.color : "#CCC" }}>{isExpanded ? "▲ Less" : "▼ Details"}</span>
               </div>
             </div>
@@ -1787,6 +1872,7 @@ export default function CleaningSchedule() {
       {/* ═══ STATUS VIEW ═══ */}
       {view === "status" && <StatusView
         completions={completions}
+        allArchiveData={allArchiveData}
         getTaskList={getTaskList}
         allRooms={allRooms}
         levels={levels}
