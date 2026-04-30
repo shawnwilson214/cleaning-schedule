@@ -631,20 +631,30 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
     }
   });
 
-  // ── Helper: count completed tasks for a given freq + period key from archive ──
+  // ── Helper: count completed tasks for a given freq + period key ──
+  // Checks both the archive AND live completions (in case the period hasn't been pruned yet)
   function countDoneForPeriod(freq, periodKey) {
-    const archiveObj = allArchiveData[periodKey] || {};
     const seen = new Set();
-    Object.entries(archiveObj).forEach(([key, c]) => {
-      if (!c || c.freq !== freq) return;
-      const room = allRooms.find(r => key.startsWith(r.id + "-"));
-      if (!room) return;
-      const afterRoom = key.slice(room.id.length + 1);
-      const afterFreq = afterRoom.slice(freq.length + 1);
-      const taskIndex = parseInt(afterFreq.split("-")[0]);
-      if (isNaN(taskIndex)) return;
-      seen.add(room.id + "-" + freq + "-" + taskIndex);
-    });
+
+    function scanObj(obj) {
+      Object.entries(obj).forEach(([key, c]) => {
+        if (!c || c.freq !== freq) return;
+        if (c.periodKey !== periodKey) return;
+        const room = allRooms.find(r => key.startsWith(r.id + "-"));
+        if (!room) return;
+        const afterRoom = key.slice(room.id.length + 1);
+        const afterFreq = afterRoom.slice(freq.length + 1);
+        const taskIndex = parseInt(afterFreq.split("-")[0]);
+        if (isNaN(taskIndex)) return;
+        seen.add(room.id + "-" + freq + "-" + taskIndex);
+      });
+    }
+
+    // Scan archived data for this period
+    scanObj(allArchiveData[periodKey] || {});
+    // Also scan live completions — catches periods that haven't been pruned to archive yet
+    scanObj(completions);
+
     return seen.size;
   }
 
@@ -881,6 +891,116 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
   );
 }
 
+
+function KidCalendar({ kid, allowanceData }) {
+  const kidData = allowanceData[kid.id] || { balance: 0, history: [] };
+  const earnHistory = (kidData.history || []).filter(h => h.type === "earn");
+  const earnedDays = new Set(earnHistory.map(h => {
+    if (h.dayKey) return h.dayKey.replace("Daily:", "");
+    if (h.date) {
+      const d = new Date(h.date);
+      return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+    }
+    return null;
+  }).filter(Boolean));
+
+  const now = new Date();
+  const [calYear, setCalYear] = useState(now.getFullYear());
+  const [calMonth, setCalMonth] = useState(now.getMonth());
+
+  const todayStr = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0") + "-" + String(now.getDate()).padStart(2,"0");
+  const isCurrentMonth = calYear === now.getFullYear() && calMonth === now.getMonth();
+  const monthPrefix = calYear + "-" + String(calMonth + 1).padStart(2, "0");
+  const monthName = new Date(calYear, calMonth, 1).toLocaleDateString([], { month: "long", year: "numeric" });
+  const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+
+  const earnedThisMonth = [...earnedDays].filter(d => d.startsWith(monthPrefix)).length;
+  const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  function prevMonth() {
+    if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); }
+    else setCalMonth(m => m - 1);
+  }
+  function nextMonth() {
+    if (isCurrentMonth) return;
+    if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); }
+    else setCalMonth(m => m + 1);
+  }
+
+  return (
+    <div style={{ paddingBottom: 60 }}>
+      {/* Summary strip */}
+      <div style={{ margin: "14px 14px 0", background: kid.color + "15", border: "2px solid " + kid.color + "44", borderRadius: 14, padding: "14px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <Avatar member={kid} size={32} fontSize={14} />
+          <div>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: "bold", color: kid.color }}>{kid.name}'s Earning Calendar</p>
+            <p style={{ margin: "2px 0 0", fontSize: 11, color: "#888" }}>$2 earned for every day all tasks are completed</p>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 16 }}>
+          <div style={{ textAlign: "center" }}>
+            <p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: kid.color }}>{earnedThisMonth}</p>
+            <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>days this month</p>
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#6DB894" }}>${earnedThisMonth * 2}</p>
+            <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>earned this month</p>
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#AAA" }}>{earnHistory.length}</p>
+            <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>days all-time</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Calendar */}
+      <div style={{ margin: "14px 14px 0", background: "#fff", border: "1px solid #E4E0D8", borderRadius: 14, overflow: "hidden" }}>
+        {/* Month nav */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F5F2EC", borderBottom: "1px solid #E4E0D8" }}>
+          <button onClick={prevMonth} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#555", padding: "0 6px" }}>‹</button>
+          <span style={{ fontSize: 14, fontWeight: "bold", color: "#1A1A1A" }}>{monthName}</span>
+          <button onClick={nextMonth} disabled={isCurrentMonth} style={{ background: "none", border: "none", fontSize: 20, cursor: isCurrentMonth ? "default" : "pointer", color: isCurrentMonth ? "#DDD" : "#555", padding: "0 6px" }}>›</button>
+        </div>
+
+        {/* Day headers */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: "1px solid #E4E0D8" }}>
+          {dayNames.map(d => (
+            <div key={d} style={{ textAlign: "center", padding: "8px 0", fontSize: 10, color: "#AAA", fontWeight: "bold" }}>{d}</div>
+          ))}
+        </div>
+
+        {/* Day cells */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+          {Array.from({ length: firstDayOfMonth }).map((_, i) => <div key={"e"+i} style={{ minHeight: 52 }} />)}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const dayNum = i + 1;
+            const dateStr = monthPrefix + "-" + String(dayNum).padStart(2, "0");
+            const isEarned = earnedDays.has(dateStr);
+            const isToday = dateStr === todayStr;
+            const isFuture = dateStr > todayStr;
+            const col = (i + firstDayOfMonth) % 7;
+            const isWeekend = col === 0 || col === 6;
+            return (
+              <div key={dayNum} style={{ minHeight: 52, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 2px", background: isToday ? kid.color + "12" : isWeekend ? "#FAFAF8" : "#fff", borderTop: "1px solid #F5F2EC" }}>
+                <span style={{ fontSize: 13, fontWeight: isToday ? "bold" : "normal", color: isFuture ? "#DDD" : isToday ? kid.color : "#1A1A1A", marginBottom: isEarned ? 2 : 0 }}>{dayNum}</span>
+                {isEarned && <span style={{ fontSize: 15, lineHeight: 1 }}>💲</span>}
+                {isToday && !isEarned && <div style={{ width: 4, height: 4, borderRadius: "50%", background: kid.color, marginTop: 2 }} />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{ margin: "10px 14px 0", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 15 }}>💲</span>
+        <span style={{ fontSize: 11, color: "#888" }}>All daily tasks completed — $2 earned</span>
+      </div>
+    </div>
+  );
+}
 
 function DraggableTaskList({ tasks, freq, editRoom, editingTask, fmr, onReorder, onEdit, onDelete, EditForm, onSaveEdit, onCancelEdit }) {
   const dragIndexRef = useRef(null);
@@ -1706,75 +1826,9 @@ export default function CleaningSchedule() {
       )}
 
       {/* ═══ CALENDAR VIEW (kids only) ═══ */}
-      {view === "calendar" && isKidMode && (() => {
-        const kid = activeMember;
-        const kidData = allowanceData[kid.id] || { balance: 0, history: [] };
-        const earnHistory = (kidData.history || []).filter(h => h.type === "earn");
-        const earnedDays = new Set(earnHistory.map(h => { if (h.dayKey) return h.dayKey.replace("Daily:", ""); if (h.date) return toDateStr(h.date); return null; }).filter(Boolean));
-        const now = new Date();
-        const [calYear, setCalYear] = useState(now.getFullYear());
-        const [calMonth, setCalMonth] = useState(now.getMonth());
-        const monthName = new Date(calYear, calMonth, 1).toLocaleDateString([], { month: "long", year: "numeric" });
-        const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
-        const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
-        const todayStr = toDateStr(now.getTime());
-        const isCurrentMonth = calYear === now.getFullYear() && calMonth === now.getMonth();
-        function prevMonth() { if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); } else setCalMonth(m => m - 1); }
-        function nextMonth() { if (isCurrentMonth) return; if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); } else setCalMonth(m => m + 1); }
-        const monthPrefix = calYear + "-" + String(calMonth + 1).padStart(2, "0");
-        const earnedThisMonth = [...earnedDays].filter(d => d.startsWith(monthPrefix)).length;
-        const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-        return (
-          <div style={{ paddingBottom: 60 }}>
-            <div style={{ margin: "14px 14px 0", background: kid.color + "15", border: "2px solid " + kid.color + "44", borderRadius: 14, padding: "14px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                <Avatar member={kid} size={32} fontSize={14} />
-                <div>
-                  <p style={{ margin: 0, fontSize: 14, fontWeight: "bold", color: kid.color }}>{kid.name}'s Earning Calendar</p>
-                  <p style={{ margin: "2px 0 0", fontSize: 11, color: "#888" }}>$2 earned for every day all tasks are completed</p>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 16 }}>
-                <div style={{ textAlign: "center" }}><p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: kid.color }}>{earnedThisMonth}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>days this month</p></div>
-                <div style={{ textAlign: "center" }}><p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#6DB894" }}>${earnedThisMonth * 2}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>earned this month</p></div>
-                <div style={{ textAlign: "center" }}><p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#AAA" }}>{earnHistory.length}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>days all-time</p></div>
-              </div>
-            </div>
-            <div style={{ margin: "14px 14px 0", background: "#fff", border: "1px solid #E4E0D8", borderRadius: 14, overflow: "hidden" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F5F2EC", borderBottom: "1px solid #E4E0D8" }}>
-                <button onClick={prevMonth} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#555", padding: "0 6px" }}>‹</button>
-                <span style={{ fontSize: 14, fontWeight: "bold", color: "#1A1A1A" }}>{monthName}</span>
-                <button onClick={nextMonth} disabled={isCurrentMonth} style={{ background: "none", border: "none", fontSize: 20, cursor: isCurrentMonth ? "default" : "pointer", color: isCurrentMonth ? "#DDD" : "#555", padding: "0 6px" }}>›</button>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: "1px solid #E4E0D8" }}>
-                {dayNames.map(d => <div key={d} style={{ textAlign: "center", padding: "8px 0", fontSize: 10, color: "#AAA", fontWeight: "bold" }}>{d}</div>)}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
-                {Array.from({ length: firstDayOfMonth }).map((_, i) => <div key={"e"+i} style={{ minHeight: 52 }} />)}
-                {Array.from({ length: daysInMonth }).map((_, i) => {
-                  const dayNum = i + 1;
-                  const dateStr = monthPrefix + "-" + String(dayNum).padStart(2, "0");
-                  const isEarned = earnedDays.has(dateStr);
-                  const isToday = dateStr === todayStr;
-                  const isFuture = dateStr > todayStr;
-                  const col = (i + firstDayOfMonth) % 7;
-                  return (
-                    <div key={dayNum} style={{ minHeight: 52, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 2px", background: isToday ? kid.color + "12" : (col===0||col===6) ? "#FAFAF8" : "#fff", borderTop: "1px solid #F5F2EC" }}>
-                      <span style={{ fontSize: 13, fontWeight: isToday ? "bold" : "normal", color: isFuture ? "#DDD" : isToday ? kid.color : "#1A1A1A", marginBottom: isEarned ? 2 : 0 }}>{dayNum}</span>
-                      {isEarned && <span style={{ fontSize: 15, lineHeight: 1 }}>💲</span>}
-                      {isToday && !isEarned && <div style={{ width: 4, height: 4, borderRadius: "50%", background: kid.color, marginTop: 2 }} />}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div style={{ margin: "10px 14px 0", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 15 }}>💲</span>
-              <span style={{ fontSize: 11, color: "#888" }}>All daily tasks completed — $2 earned</span>
-            </div>
-          </div>
-        );
-      })()}
+      {view === "calendar" && isKidMode && (
+        <KidCalendar kid={activeMember} allowanceData={allowanceData} />
+      )}
 
       {/* ═══ LEADERBOARD — hidden, preserved for future use ═══ */}
       {false && view === "leaderboard" && (() => {
