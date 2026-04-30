@@ -603,9 +603,6 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23,59,59,999);
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59,999);
-
-  // For each frequency, only look at completions within the natural reset window
-  // Daily = today, Weekly = this week, Monthly = this month, Quarterly/Annually = this year
   const yearStart = new Date(now.getFullYear(), 0, 1);
   const yearEnd = new Date(now.getFullYear(), 11, 31, 23,59,59,999);
 
@@ -616,8 +613,7 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
     return { from: yearStart.getTime(), to: yearEnd.getTime() };
   }
 
-  // Build completion lookup: baseKey -> completion object
-  // baseKey = roomId-freq-taskIndex (strip member suffix if present)
+  // Build completion lookup for current period progress bars
   const completionMap = {};
   Object.entries(completions).forEach(([key, c]) => {
     if (!c || !c.at || !c.freq) return;
@@ -635,55 +631,128 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
     }
   });
 
-  // ── 7-day rolling daily completion data ─────────────────────────────────
-  // Build per-day completion maps from both live + archive data
-  const sevenDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(now);
-    d.setDate(now.getDate() - (6 - i)); // oldest first
-    d.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(d); dayEnd.setHours(23, 59, 59, 999);
-    return { date: d, dayEnd, label: i === 6 ? "Today" : d.toLocaleDateString([], { weekday: "short" }), dateStr: d.toDateString() };
-  });
-
-  // Total daily tasks (same every day)
-  let dailyTotal = 0;
-  allRooms.forEach(room => { dailyTotal += getTaskList(room.id, "Daily").length; });
-
-  // Count completions per day across all sources
-  const dailyDoneCounts = sevenDays.map(() => new Set());
-
-  function scanForSevenDay(obj) {
-    Object.entries(obj).forEach(([key, c]) => {
-      if (!c || !c.at || c.freq !== "Daily") return;
+  // ── Helper: count completed tasks for a given freq + period key from archive ──
+  function countDoneForPeriod(freq, periodKey) {
+    const archiveObj = allArchiveData[periodKey] || {};
+    const seen = new Set();
+    Object.entries(archiveObj).forEach(([key, c]) => {
+      if (!c || c.freq !== freq) return;
       const room = allRooms.find(r => key.startsWith(r.id + "-"));
       if (!room) return;
       const afterRoom = key.slice(room.id.length + 1);
-      const afterFreq = afterRoom.slice("Daily".length + 1);
+      const afterFreq = afterRoom.slice(freq.length + 1);
       const taskIndex = parseInt(afterFreq.split("-")[0]);
       if (isNaN(taskIndex)) return;
-      const baseKey = room.id + "-Daily-" + taskIndex;
-      const cDate = new Date(c.at).toDateString();
-      sevenDays.forEach((day, i) => {
-        if (cDate === day.dateStr) dailyDoneCounts[i].add(baseKey);
-      });
+      seen.add(room.id + "-" + freq + "-" + taskIndex);
     });
+    return seen.size;
   }
 
-  scanForSevenDay(completions);
-  Object.values(allArchiveData || {}).forEach(d => scanForSevenDay(d));
+  // ── Total tasks per frequency (static — doesn't change by period) ──
+  function totalForFreq(freq) {
+    let t = 0;
+    allRooms.forEach(room => { t += getTaskList(room.id, freq).length; });
+    return t;
+  }
 
-  const sevenDayData = sevenDays.map((day, i) => ({
-    ...day,
-    done: dailyDoneCounts[i].size,
-    pct: dailyTotal > 0 ? Math.min(100, Math.round(dailyDoneCounts[i].size / dailyTotal * 100)) : 0,
-  }));
+  const dailyTotal = totalForFreq("Daily");
+  const weeklyTotal = totalForFreq("Weekly");
+  const monthlyTotal = totalForFreq("Monthly");
+  const quarterlyTotal = totalForFreq("Quarterly");
 
-  // Compute stats for a given set of frequencies
+  // ── Build rolling history bars for each frequency ──
+
+  // Daily: last 6 completed days (excluding today)
+  const dailyBars = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now);
+    d.setDate(now.getDate() - (6 - i)); // 6 days ago → yesterday
+    d.setHours(12, 0, 0, 0);
+    const periodKey = "Daily:" + d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+    const done = countDoneForPeriod("Daily", periodKey);
+    const pct = dailyTotal > 0 ? Math.min(100, Math.round(done / dailyTotal * 100)) : 0;
+    const label = d.toLocaleDateString([], { weekday: "short" });
+    return { label, done, pct, periodKey };
+  });
+
+  // Weekly: last 6 completed weeks (excluding current week)
+  const weeklyBars = Array.from({ length: 6 }, (_, i) => {
+    const weekOffset = 6 - i; // 6 weeks ago → last week
+    const sun = new Date(weekStart);
+    sun.setDate(weekStart.getDate() - weekOffset * 7);
+    const periodKey = "Weekly:" + sun.getFullYear() + "-" + String(sun.getMonth()+1).padStart(2,"0") + "-" + String(sun.getDate()).padStart(2,"0");
+    const done = countDoneForPeriod("Weekly", periodKey);
+    const pct = weeklyTotal > 0 ? Math.min(100, Math.round(done / weeklyTotal * 100)) : 0;
+    const sat = new Date(sun); sat.setDate(sun.getDate() + 6);
+    const label = sun.toLocaleDateString([], { month: "short", day: "numeric" });
+    return { label, done, pct, periodKey };
+  });
+
+  // Monthly: last 6 completed months (excluding current month)
+  const monthlyBars = Array.from({ length: 6 }, (_, i) => {
+    const monthOffset = 6 - i;
+    const d = new Date(now.getFullYear(), now.getMonth() - monthOffset, 1);
+    const periodKey = "Monthly:" + d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+    const done = countDoneForPeriod("Monthly", periodKey);
+    const pct = monthlyTotal > 0 ? Math.min(100, Math.round(done / monthlyTotal * 100)) : 0;
+    const label = d.toLocaleDateString([], { month: "short" });
+    return { label, done, pct, periodKey };
+  });
+
+  // Quarterly: last 4 completed quarters (excluding current quarter)
+  const currentQuarter = Math.floor(now.getMonth() / 3);
+  const quarterlyBars = Array.from({ length: 4 }, (_, i) => {
+    const qOffset = 4 - i;
+    let qNum = currentQuarter - qOffset;
+    let qYear = now.getFullYear();
+    while (qNum < 0) { qNum += 4; qYear--; }
+    const qLabel = "Q" + (qNum + 1);
+    const periodKey = "Quarterly:" + qYear + "-" + qLabel;
+    const done = countDoneForPeriod("Quarterly", periodKey);
+    const pct = quarterlyTotal > 0 ? Math.min(100, Math.round(done / quarterlyTotal * 100)) : 0;
+    const qNames = ["Jan–Mar", "Apr–Jun", "Jul–Sep", "Oct–Dec"];
+    const label = qLabel;
+    return { label, sublabel: qNames[qNum] + " " + qYear, done, pct, periodKey };
+  });
+
+  // ── Shared bar chart renderer ──
+  function HistoryChart({ bars, color, totalTasks, showSublabel }) {
+    if (!bars || bars.every(b => b.done === 0)) {
+      return <p style={{ fontSize: 11, color: "#CCC", fontStyle: "italic", margin: "10px 0 0" }}>No historical data yet — check back after completing tasks in past periods.</p>;
+    }
+    const maxPct = Math.max(...bars.map(b => b.pct), 1);
+    return (
+      <div style={{ marginTop: 14 }}>
+        <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Past {bars.length} periods
+        </p>
+        <div style={{ display: "flex", gap: 4, alignItems: "flex-end" }}>
+          {bars.map((bar, i) => {
+            const isEmpty = bar.pct === 0;
+            const isFull = bar.pct === 100;
+            const barHeight = isEmpty ? 0 : Math.max(Math.round(bar.pct / maxPct * 48), 6);
+            return (
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                <span style={{ fontSize: 9, fontWeight: "bold", color: isEmpty ? "transparent" : isFull ? color : "#888" }}>
+                  {isEmpty ? "0%" : bar.pct + "%"}
+                </span>
+                <div style={{ width: "100%", height: 48, background: "#F0EDE6", borderRadius: 5, overflow: "hidden", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                  <div style={{ width: "100%", height: barHeight, background: isFull ? color : color + "77", borderRadius: 5, transition: "height 0.4s" }} />
+                </div>
+                <span style={{ fontSize: 9, color: "#AAA", whiteSpace: "nowrap", textAlign: "center" }}>{bar.label}</span>
+                {showSublabel && bar.sublabel && <span style={{ fontSize: 8, color: "#CCC", whiteSpace: "nowrap", textAlign: "center" }}>{bar.sublabel}</span>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // Compute stats for current period (used for progress bar + expanded detail)
   function computeStats(freqList) {
     let total = 0, done = 0;
     const byLevel = {};
     const byRoom = {};
-
     levels.forEach(lv => {
       let lvTotal = 0, lvDone = 0;
       lv.rooms.forEach(room => {
@@ -697,22 +766,18 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
           });
         });
         if (rTotal > 0) byRoom[room.id] = { name: room.name, icon: room.icon, total: rTotal, done: rDone, levelColor: lv.color };
-        lvTotal += rTotal;
-        lvDone += rDone;
-        total += rTotal;
-        done += rDone;
+        lvTotal += rTotal; lvDone += rDone; total += rTotal; done += rDone;
       });
       if (lvTotal > 0) byLevel[lv.id] = { label: lv.label, icon: lv.icon, color: lv.color, total: lvTotal, done: lvDone };
     });
-
     return { total, done: Math.min(done, total), byLevel, byRoom };
   }
 
   const freqCards = [
-    { id: "daily",     label: "Daily",     freq: ["Daily"],     color: "#E8C547", period: now.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"}), sevenDayData },
-    { id: "weekly",    label: "Weekly",    freq: ["Weekly"],    color: "#5B9BD5", period: weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric"}) },
-    { id: "monthly",   label: "Monthly",   freq: ["Monthly"],   color: "#6DB894", period: now.toLocaleDateString([],{month:"long",year:"numeric"}) },
-    { id: "quarterly", label: "Quarterly", freq: ["Quarterly"], color: "#A67DC4", period: "Q"+Math.ceil((now.getMonth()+1)/3)+" "+now.getFullYear() },
+    { id: "daily",     label: "Daily",     freq: ["Daily"],     color: "#E8C547", period: now.toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"}), historyBars: dailyBars },
+    { id: "weekly",    label: "Weekly",    freq: ["Weekly"],    color: "#5B9BD5", period: weekStart.toLocaleDateString([],{month:"short",day:"numeric"})+" - "+weekEnd.toLocaleDateString([],{month:"short",day:"numeric"}), historyBars: weeklyBars },
+    { id: "monthly",   label: "Monthly",   freq: ["Monthly"],   color: "#6DB894", period: now.toLocaleDateString([],{month:"long",year:"numeric"}), historyBars: monthlyBars },
+    { id: "quarterly", label: "Quarterly", freq: ["Quarterly"], color: "#A67DC4", period: "Q"+Math.ceil((now.getMonth()+1)/3)+" "+now.getFullYear(), historyBars: quarterlyBars, showSublabel: true },
     { id: "annually",  label: "Annual",    freq: ["Annually"],  color: "#D4445A", period: now.getFullYear().toString() },
   ];
 
@@ -727,7 +792,7 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
 
         return (
           <div key={card.id} style={{ marginBottom: 12, borderRadius: 14, overflow: "hidden", border: "1px solid " + card.color + "55", background: "#fff" }}>
-            {/* Card header — always visible */}
+            {/* Card header */}
             <div onClick={() => setExpandedCard(isExpanded ? null : card.id)} style={{ padding: "14px 16px", cursor: "pointer", background: isExpanded ? card.color + "12" : "#fff" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
                 <div>
@@ -744,45 +809,14 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
                 <div style={{ height: "100%", width: pct + "%", background: card.color, borderRadius: 4, transition: "width 0.4s" }} />
               </div>
 
-              {/* 7-day rolling chart — daily card only */}
-              {card.id === "daily" && card.sevenDayData && (
-                <div style={{ marginTop: 14 }}>
-                  <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>Last 7 Days</p>
-                  <div style={{ display: "flex", gap: 4, alignItems: "flex-end" }}>
-                    {card.sevenDayData.map((day, i) => {
-                      const isToday = i === 6;
-                      const isEmpty = day.pct === 0;
-                      const isFull = day.pct === 100;
-                      return (
-                        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                          {/* Percentage label */}
-                          <span style={{ fontSize: 9, fontWeight: "bold", color: isEmpty ? "#CCC" : isFull ? card.color : "#888" }}>
-                            {isEmpty ? "" : day.pct + "%"}
-                          </span>
-                          {/* Bar */}
-                          <div style={{ width: "100%", height: 48, background: "#F0EDE6", borderRadius: 5, overflow: "hidden", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
-                            <div style={{
-                              width: "100%",
-                              height: day.pct + "%",
-                              background: isFull ? card.color : isToday ? card.color + "AA" : card.color + "66",
-                              borderRadius: 5,
-                              transition: "height 0.4s",
-                              minHeight: day.pct > 0 ? 4 : 0,
-                            }} />
-                          </div>
-                          {/* Day label */}
-                          <span style={{ fontSize: 9, color: isToday ? "#1A1A1A" : "#AAA", fontWeight: isToday ? "bold" : "normal", whiteSpace: "nowrap" }}>
-                            {day.label}
-                          </span>
-                          {/* Done/total below label */}
-                          <span style={{ fontSize: 8, color: "#CCC" }}>
-                            {day.done}/{dailyTotal}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+              {/* Historical bar chart */}
+              {card.historyBars && (
+                <HistoryChart
+                  bars={card.historyBars}
+                  color={card.color}
+                  totalTasks={totalForFreq(card.freq[0])}
+                  showSublabel={card.showSublabel}
+                />
               )}
 
               <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
@@ -793,8 +827,6 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
             {/* Expanded detail */}
             {isExpanded && (
               <div style={{ borderTop: "1px solid " + card.color + "33", padding: "14px 16px", background: card.color + "06" }}>
-
-                {/* By Level */}
                 <p style={{ margin: "0 0 10px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>By Floor</p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
                   {Object.values(stats.byLevel).map(lv => {
@@ -816,7 +848,6 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
                   })}
                 </div>
 
-                {/* By Room */}
                 <p style={{ margin: "0 0 10px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.08em" }}>By Room</p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                   {Object.values(stats.byRoom)
@@ -851,9 +882,55 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
 }
 
 
+function DraggableTaskList({ tasks, freq, editRoom, editingTask, fmr, onReorder, onEdit, onDelete, EditForm, onSaveEdit, onCancelEdit }) {
+  const dragIndexRef = useRef(null);
+  const [dragOver, setDragOver] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  function handleDragStart(e, i) { dragIndexRef.current = i; setIsDragging(true); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setDragImage(e.currentTarget, 20, 20); }
+  function handleDragEnter(i) { if (dragIndexRef.current === null || dragIndexRef.current === i) return; setDragOver(i); }
+  function handleDragEnd() { if (dragIndexRef.current !== null && dragOver !== null && dragIndexRef.current !== dragOver) { onReorder(dragIndexRef.current, dragOver); } dragIndexRef.current = null; setDragOver(null); setIsDragging(false); }
+  return (
+    <div>
+      {tasks.map((task, i) => {
+        const isEditing = editingTask?.roomId === editRoom.id && editingTask?.freq === freq && editingTask?.index === i;
+        const isDragTarget = dragOver === i, isDragSource = isDragging && dragIndexRef.current === i;
+        if (isEditing) return <div key={i} style={{ marginBottom: 5 }}><EditForm fmr={fmr} onSave={() => onSaveEdit(i)} onCancel={onCancelEdit} /></div>;
+        return (
+          <div key={i} draggable onDragStart={e => handleDragStart(e, i)} onDragEnter={() => handleDragEnter(i)} onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }} onDragEnd={handleDragEnd}
+            style={{ marginBottom: 5, opacity: isDragSource ? 0.4 : 1, transform: isDragTarget && !isDragSource ? "translateY(-2px)" : "none", transition: "transform 0.12s, opacity 0.12s", borderTop: isDragTarget && dragIndexRef.current > i ? "2px solid " + fmr.dot : "none", borderBottom: isDragTarget && dragIndexRef.current < i ? "2px solid " + fmr.dot : "none" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "9px 12px", background: "#fff", border: "1px solid " + (isDragTarget ? fmr.dot : "#E4E0D8"), borderRadius: 10, cursor: "grab" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, paddingTop: 4, flexShrink: 0, opacity: 0.35 }}>
+                <div style={{ width: 14, height: 2, background: "#555", borderRadius: 1 }} />
+                <div style={{ width: 14, height: 2, background: "#555", borderRadius: 1 }} />
+                <div style={{ width: 14, height: 2, background: "#555", borderRadius: 1 }} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ margin: 0, fontSize: 13, color: "#1A1A1A" }}>{task.text}</p>
+                <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+                  {task.assignees?.length > 0 && task.assignees.map(aid => { const m = FAMILY.find(f => f.id === aid); return m ? <Avatar key={aid} member={m} size={16} fontSize={8} /> : null; })}
+                  {task.time && <span style={{ fontSize: 10, color: "#AAA", background: "#F5F2EC", padding: "1px 6px", borderRadius: 6 }}>~{task.time}</span>}
+                </div>
+              </div>
+              <button onClick={() => onEdit(i)} style={{ fontSize: 11, color: "#AAA", background: "none", border: "none", cursor: "pointer", padding: "4px 6px", flexShrink: 0 }}>Edit</button>
+              <button onClick={() => onDelete(i)} style={{ fontSize: 11, color: "#D47F6B", background: "none", border: "none", cursor: "pointer", padding: "4px 6px", flexShrink: 0 }}>Delete</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function CleaningSchedule() {
   const [activeFreq, setActiveFreq] = useState("Daily");
-  const [activeMember, setActiveMember] = useState(FAMILY[0]);
+
+  const lockedMember = (() => {
+    const param = new URLSearchParams(window.location.search).get("user");
+    if (!param) return null;
+    return FAMILY.find(m => m.id === param.toLowerCase().trim() || m.name.toLowerCase() === param.toLowerCase().trim()) || null;
+  })();
+
+  const [activeMember, setActiveMember] = useState(lockedMember || FAMILY[0]);
   const [haUserDetected, setHaUserDetected] = useState(false);
 
   // Auto-select family member. Priority:
@@ -947,9 +1024,11 @@ export default function CleaningSchedule() {
   const [adjAmounts, setAdjAmounts] = useState({});
   const [adjNotes, setAdjNotes] = useState({});
   const [historyExpanded, setHistoryExpanded] = useState({});
-  const [notifyConfig, setNotifyConfig] = useState(null); // loaded from Firebase
+  const [notifyConfig, setNotifyConfig] = useState(null);
   const [notifyConfigLoaded, setNotifyConfigLoaded] = useState(false);
   const [notifyTestStatus, setNotifyTestStatus] = useState({});
+  const [deletedEntry, setDeletedEntry] = useState(null);
+  const undoTimerRef = useRef(null);
 
   const writingRef = useRef(false);
   const isKidMode = activeMember.isKid;
@@ -987,8 +1066,16 @@ export default function CleaningSchedule() {
 
   function getVisibleTasks(roomId, freq) {
     const tasks = getTaskList(roomId, freq);
-    if (!isKidMode) return tasks;
-    return tasks.filter(t => isVisibleToKid(t, roomId, activeMember));
+    if (isKidMode) {
+      return tasks.filter(t => isVisibleToKid(t, roomId, activeMember));
+    }
+    return tasks.filter(t => {
+      const nameTag = t.text.match(/\((\w+)\)$/);
+      if (nameTag) return false;
+      const kidIds = FAMILY.filter(f => f.isKid).map(f => f.id);
+      if (t.assignees?.length > 0 && t.assignees.every(aid => kidIds.includes(aid))) return false;
+      return true;
+    });
   }
 
   function ensureSnapshot(roomId, freq, prev) {
@@ -1000,7 +1087,7 @@ export default function CleaningSchedule() {
     return { ...prev, [roomId]: { ...(prev[roomId] || {}), [freq]: base } };
   }
 
-  useEffect(() => { if (isKidMode && view === "edit") setView("tasks"); }, [isKidMode, view]);
+  useEffect(() => { if (isKidMode && (view === "edit" || view === "leaderboard")) setView("tasks"); }, [isKidMode, view]);
 
   const archivePeriod = useCallback(async (periodKey, data) => {
     if (!data || Object.keys(data).length === 0) return;
@@ -1292,7 +1379,7 @@ export default function CleaningSchedule() {
 
 
   useEffect(() => {
-    if (view !== "history" && view !== "leaderboard" && view !== "status") return;
+    if (view !== "history" && view !== "status") return;
     async function loadAll() {
       setArchiveLoading(true); setReportResults(null);
       try {
@@ -1560,8 +1647,8 @@ export default function CleaningSchedule() {
   );
 
   const tabs = isKidMode
-    ? [["tasks","Tasks"],["leaderboard","Leaderboard"],["allowance","Allowance"]]
-    : [["tasks","Tasks"],["status","Status"],["leaderboard","Leaderboard"],["allowance","Allowance"],["history","History"],["edit","Edit"],["notify","Notify"]];
+    ? [["tasks","Tasks"],["calendar","Calendar"],["allowance","Allowance"]]
+    : [["tasks","Tasks"],["status","Status"],["allowance","Allowance"],["history","History"],["edit","Edit"],["notify","Notify"]];
 
   return (
     <div style={{ minHeight: "100vh", background: "#F5F2EC", fontFamily: "Georgia, serif" }} key={activeMember.id}>
@@ -1570,27 +1657,29 @@ export default function CleaningSchedule() {
       <div style={{ background: "#1A1A1A", color: "#F5F2EC", padding: "20px 20px 14px" }}>
         <p style={{ fontSize: 10, letterSpacing: "0.25em", color: "#555", margin: "0 0 4px", textTransform: "uppercase" }}>Home Management</p>
         <h1 style={{ fontSize: 24, fontWeight: "normal", margin: "0 0 12px" }}>Cleaning Schedule</h1>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {/* Adults row */}
-          <div style={{ display: "flex", gap: 8 }}>
-            {FAMILY.filter(m => !m.isKid).map(m => (
-              <button key={m.id} onClick={() => setActiveMember(m)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, cursor: "pointer", border: "2px solid "+(activeMember.id===m.id?m.color:"transparent"), background: activeMember.id===m.id?m.color+"22":"rgba(255,255,255,0.07)", color: activeMember.id===m.id?"#fff":"#888", fontFamily: "inherit", fontSize: 12, fontWeight: activeMember.id===m.id?"bold":"normal" }}>
-                <Avatar member={m} size={22} fontSize={11} /><span>{m.name}</span>
-              </button>
-            ))}
+        {!lockedMember && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              {FAMILY.filter(m => !m.isKid).map(m => (
+                <button key={m.id} onClick={() => setActiveMember(m)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, cursor: "pointer", border: "2px solid "+(activeMember.id===m.id?m.color:"transparent"), background: activeMember.id===m.id?m.color+"22":"rgba(255,255,255,0.07)", color: activeMember.id===m.id?"#fff":"#888", fontFamily: "inherit", fontSize: 12, fontWeight: activeMember.id===m.id?"bold":"normal" }}>
+                  <Avatar member={m} size={22} fontSize={11} /><span>{m.name}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {FAMILY.filter(m => m.isKid).map(m => (
+                <button key={m.id} onClick={() => setActiveMember(m)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, cursor: "pointer", border: "2px solid "+(activeMember.id===m.id?m.color:"transparent"), background: activeMember.id===m.id?m.color+"22":"rgba(255,255,255,0.07)", color: activeMember.id===m.id?"#fff":"#888", fontFamily: "inherit", fontSize: 12, fontWeight: activeMember.id===m.id?"bold":"normal" }}>
+                  <Avatar member={m} size={22} fontSize={11} /><span>{m.name}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          {/* Kids row */}
-          <div style={{ display: "flex", gap: 8 }}>
-            {FAMILY.filter(m => m.isKid).map(m => (
-              <button key={m.id} onClick={() => setActiveMember(m)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, cursor: "pointer", border: "2px solid "+(activeMember.id===m.id?m.color:"transparent"), background: activeMember.id===m.id?m.color+"22":"rgba(255,255,255,0.07)", color: activeMember.id===m.id?"#fff":"#888", fontFamily: "inherit", fontSize: 12, fontWeight: activeMember.id===m.id?"bold":"normal" }}>
-                <Avatar member={m} size={22} fontSize={11} /><span>{m.name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
         <p style={{ fontSize: 11, color: "#555", margin: "8px 0 0" }}>
-          Completing as <strong style={{ color: activeMember.color }}>{activeMember.name}</strong>
-          {isKidMode && <span style={{ marginLeft: 8, fontSize: 10, color: "#6DB894", background: "#1A3025", padding: "2px 8px", borderRadius: 10 }}>My Tasks</span>}
+          {lockedMember
+            ? <><Avatar member={activeMember} size={18} fontSize={9} /> <strong style={{ color: activeMember.color }}>{activeMember.name}'s</strong> dashboard <span style={{ marginLeft: 6, fontSize: 10, color: "#6DB894", background: "#1A3025", padding: "2px 8px", borderRadius: 10 }}>My Tasks</span></>
+            : <>Completing as <strong style={{ color: activeMember.color }}>{activeMember.name}</strong>{isKidMode && <span style={{ marginLeft: 8, fontSize: 10, color: "#6DB894", background: "#1A3025", padding: "2px 8px", borderRadius: 10 }}>My Tasks</span>}</>
+          }
         </p>
       </div>
 
@@ -1616,8 +1705,79 @@ export default function CleaningSchedule() {
         </div>
       )}
 
-      {/* ═══ LEADERBOARD VIEW ═══ */}
-      {view === "leaderboard" && (() => {
+      {/* ═══ CALENDAR VIEW (kids only) ═══ */}
+      {view === "calendar" && isKidMode && (() => {
+        const kid = activeMember;
+        const kidData = allowanceData[kid.id] || { balance: 0, history: [] };
+        const earnHistory = (kidData.history || []).filter(h => h.type === "earn");
+        const earnedDays = new Set(earnHistory.map(h => { if (h.dayKey) return h.dayKey.replace("Daily:", ""); if (h.date) return toDateStr(h.date); return null; }).filter(Boolean));
+        const now = new Date();
+        const [calYear, setCalYear] = useState(now.getFullYear());
+        const [calMonth, setCalMonth] = useState(now.getMonth());
+        const monthName = new Date(calYear, calMonth, 1).toLocaleDateString([], { month: "long", year: "numeric" });
+        const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
+        const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+        const todayStr = toDateStr(now.getTime());
+        const isCurrentMonth = calYear === now.getFullYear() && calMonth === now.getMonth();
+        function prevMonth() { if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); } else setCalMonth(m => m - 1); }
+        function nextMonth() { if (isCurrentMonth) return; if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); } else setCalMonth(m => m + 1); }
+        const monthPrefix = calYear + "-" + String(calMonth + 1).padStart(2, "0");
+        const earnedThisMonth = [...earnedDays].filter(d => d.startsWith(monthPrefix)).length;
+        const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+        return (
+          <div style={{ paddingBottom: 60 }}>
+            <div style={{ margin: "14px 14px 0", background: kid.color + "15", border: "2px solid " + kid.color + "44", borderRadius: 14, padding: "14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                <Avatar member={kid} size={32} fontSize={14} />
+                <div>
+                  <p style={{ margin: 0, fontSize: 14, fontWeight: "bold", color: kid.color }}>{kid.name}'s Earning Calendar</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 11, color: "#888" }}>$2 earned for every day all tasks are completed</p>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 16 }}>
+                <div style={{ textAlign: "center" }}><p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: kid.color }}>{earnedThisMonth}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>days this month</p></div>
+                <div style={{ textAlign: "center" }}><p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#6DB894" }}>${earnedThisMonth * 2}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>earned this month</p></div>
+                <div style={{ textAlign: "center" }}><p style={{ margin: 0, fontSize: 22, fontWeight: "bold", color: "#AAA" }}>{earnHistory.length}</p><p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>days all-time</p></div>
+              </div>
+            </div>
+            <div style={{ margin: "14px 14px 0", background: "#fff", border: "1px solid #E4E0D8", borderRadius: 14, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#F5F2EC", borderBottom: "1px solid #E4E0D8" }}>
+                <button onClick={prevMonth} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#555", padding: "0 6px" }}>‹</button>
+                <span style={{ fontSize: 14, fontWeight: "bold", color: "#1A1A1A" }}>{monthName}</span>
+                <button onClick={nextMonth} disabled={isCurrentMonth} style={{ background: "none", border: "none", fontSize: 20, cursor: isCurrentMonth ? "default" : "pointer", color: isCurrentMonth ? "#DDD" : "#555", padding: "0 6px" }}>›</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: "1px solid #E4E0D8" }}>
+                {dayNames.map(d => <div key={d} style={{ textAlign: "center", padding: "8px 0", fontSize: 10, color: "#AAA", fontWeight: "bold" }}>{d}</div>)}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+                {Array.from({ length: firstDayOfMonth }).map((_, i) => <div key={"e"+i} style={{ minHeight: 52 }} />)}
+                {Array.from({ length: daysInMonth }).map((_, i) => {
+                  const dayNum = i + 1;
+                  const dateStr = monthPrefix + "-" + String(dayNum).padStart(2, "0");
+                  const isEarned = earnedDays.has(dateStr);
+                  const isToday = dateStr === todayStr;
+                  const isFuture = dateStr > todayStr;
+                  const col = (i + firstDayOfMonth) % 7;
+                  return (
+                    <div key={dayNum} style={{ minHeight: 52, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "6px 2px", background: isToday ? kid.color + "12" : (col===0||col===6) ? "#FAFAF8" : "#fff", borderTop: "1px solid #F5F2EC" }}>
+                      <span style={{ fontSize: 13, fontWeight: isToday ? "bold" : "normal", color: isFuture ? "#DDD" : isToday ? kid.color : "#1A1A1A", marginBottom: isEarned ? 2 : 0 }}>{dayNum}</span>
+                      {isEarned && <span style={{ fontSize: 15, lineHeight: 1 }}>💲</span>}
+                      {isToday && !isEarned && <div style={{ width: 4, height: 4, borderRadius: "50%", background: kid.color, marginTop: 2 }} />}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{ margin: "10px 14px 0", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 15 }}>💲</span>
+              <span style={{ fontSize: 11, color: "#888" }}>All daily tasks completed — $2 earned</span>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ═══ LEADERBOARD — hidden, preserved for future use ═══ */}
+      {false && view === "leaderboard" && (() => {
         const kids = FAMILY.filter(f => f.isKid);
         const now = new Date();
         const medals = ["🥇","🥈","🥉"];
@@ -1886,33 +2046,23 @@ export default function CleaningSchedule() {
       {/* ═══ ALLOWANCE VIEW ═══ */}
       {view === "allowance" && (() => {
         const allAllowanceKids = FAMILY.filter(f => f.id === "zach" || f.id === "kyle");
-        // Kids only see their own allowance; adults see all
-        const allowanceKids = isKidMode
-          ? allAllowanceKids.filter(f => f.id === activeMember.id)
-          : allAllowanceKids;
+        const allowanceKids = isKidMode ? allAllowanceKids.filter(f => f.id === activeMember.id) : allAllowanceKids;
 
-        // Payout: resets balance to 0, adds a payout entry to the unified history (never deleted)
+        function recomputeBalance(history) {
+          return history.reduce((bal, h) => {
+            if (h.type === "earn" || h.type === "add") return bal + (h.amount || 0);
+            if (h.type === "deduct" || h.type === "payout") return Math.max(0, bal - (h.amount || 0));
+            return bal;
+          }, 0);
+        }
+
         function handlePayout(kid) {
           const current = allowanceData[kid.id] || { balance: 0, history: [] };
           const amount = current.balance || 0;
           if (amount <= 0) return;
           const payDate = new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
-          const updated = {
-            ...allowanceData,
-            [kid.id]: {
-              ...current,
-              balance: 0,
-              lastAwardedDay: current.lastAwardedDay,
-              history: [...(current.history || []), {
-                type: "payout",
-                amount,
-                date: Date.now(),
-                note: "$" + amount.toFixed(2) + " paid out to " + kid.name + " · Balance reset to $0 · " + payDate,
-              }],
-            }
-          };
-          setAllowanceData(updated);
-          saveAllowance(updated);
+          const updated = { ...allowanceData, [kid.id]: { ...current, balance: 0, lastAwardedDay: current.lastAwardedDay, history: [...(current.history || []), { type: "payout", amount, date: Date.now(), note: "$" + amount.toFixed(2) + " paid out to " + kid.name + " · Balance reset to $0 · " + payDate }] } };
+          setAllowanceData(updated); saveAllowance(updated);
         }
 
         function handleAdjust(kid, isAdd) {
@@ -1920,64 +2070,64 @@ export default function CleaningSchedule() {
           const adjNote = adjNotes[kid.id] || "";
           if (isNaN(adjAmt) || adjAmt <= 0) return;
           const current = allowanceData[kid.id] || { balance: 0, history: [] };
-          const delta = isAdd ? adjAmt : -adjAmt;
-          const newBalance = Math.max(0, (current.balance || 0) + delta);
+          const newBalance = Math.max(0, (current.balance || 0) + (isAdd ? adjAmt : -adjAmt));
           const adjDate = new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-          const baseNote = adjNote
-            ? adjNote
-            : isAdd ? "Manual bonus" : "Manual deduction";
+          const baseNote = adjNote ? adjNote : isAdd ? "Manual bonus" : "Manual deduction";
           const fullNote = baseNote + " · " + (isAdd ? "+" : "−") + "$" + adjAmt.toFixed(2) + " · Balance: $" + newBalance.toFixed(2) + " · " + adjDate;
-          const updated = {
-            ...allowanceData,
-            [kid.id]: {
-              ...current,
-              balance: newBalance,
-              history: [...(current.history || []), {
-                type: isAdd ? "add" : "deduct",
-                amount: adjAmt,
-                date: Date.now(),
-                note: fullNote,
-              }],
-            }
-          };
-          setAllowanceData(updated);
-          saveAllowance(updated);
+          const updated = { ...allowanceData, [kid.id]: { ...current, balance: newBalance, history: [...(current.history || []), { type: isAdd ? "add" : "deduct", amount: adjAmt, date: Date.now(), note: fullNote }] } };
+          setAllowanceData(updated); saveAllowance(updated);
           setAdjAmounts(prev => ({ ...prev, [kid.id]: "" }));
           setAdjNotes(prev => ({ ...prev, [kid.id]: "" }));
         }
 
-        const inSt = { fontSize: 13, padding: "7px 10px", border: "1px solid #DDD8CE", borderRadius: 8, fontFamily: "inherit", background: "#fff", boxSizing: "border-box" };
+        function handleDeleteEntry(kid, entryIndexInReversed) {
+          const originalHistory = allowanceData[kid.id]?.history || [];
+          const originalIndex = originalHistory.length - 1 - entryIndexInReversed;
+          const entry = originalHistory[originalIndex];
+          const newHistory = originalHistory.filter((_, i) => i !== originalIndex);
+          const newBalance = recomputeBalance(newHistory);
+          const prevData = allowanceData[kid.id];
+          const updated = { ...allowanceData, [kid.id]: { ...prevData, balance: newBalance, history: newHistory } };
+          setAllowanceData(updated); saveAllowance(updated);
+          if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+          setDeletedEntry({ kidId: kid.id, entry, originalIndex, prevData });
+          undoTimerRef.current = setTimeout(() => setDeletedEntry(null), 6000);
+        }
 
-        function entryColor(entry, kidColor) {
-          if (entry.type === "deduct") return "#D47F6B";
-          if (entry.type === "payout") return "#D47F6B";
-          if (entry.type === "earn") return kidColor;
-          return "#6DB894"; // add
+        function handleUndo() {
+          if (!deletedEntry) return;
+          if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+          const { kidId, entry, originalIndex, prevData } = deletedEntry;
+          const restored = [...(allowanceData[kidId]?.history || [])];
+          restored.splice(originalIndex, 0, entry);
+          const updated = { ...allowanceData, [kidId]: { ...prevData, balance: recomputeBalance(restored), history: restored } };
+          setAllowanceData(updated); saveAllowance(updated); setDeletedEntry(null);
         }
-        function entryIcon(entry) {
-          if (entry.type === "payout") return "💸";
-          if (entry.type === "deduct") return "📉";
-          if (entry.type === "earn") return "✅";
-          return "📈";
-        }
-        function entrySign(entry) {
-          return (entry.type === "deduct" || entry.type === "payout") ? "−" : "+";
-        }
+
+        const inSt = { fontSize: 13, padding: "7px 10px", border: "1px solid #DDD8CE", borderRadius: 8, fontFamily: "inherit", background: "#fff", boxSizing: "border-box" };
+        function entryColor(entry, kidColor) { if (entry.type === "deduct" || entry.type === "payout") return "#D47F6B"; if (entry.type === "earn") return kidColor; return "#6DB894"; }
+        function entryIcon(entry) { if (entry.type === "payout") return "💸"; if (entry.type === "deduct") return "📉"; if (entry.type === "earn") return "✅"; return "📈"; }
+        function entrySign(entry) { return (entry.type === "deduct" || entry.type === "payout") ? "−" : "+"; }
 
         return (
-          <div style={{ paddingBottom: 60 }}>
+          <div style={{ paddingBottom: 280 }}>
             <div style={{ padding: "14px 14px 8px" }}>
               <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: "bold", color: "#1A1A1A" }}>Allowance Tracker</p>
               <p style={{ margin: 0, fontSize: 11, color: "#AAA" }}>$2 earned when all daily tasks are completed.</p>
             </div>
 
+            {deletedEntry && (
+              <div style={{ position: "fixed", bottom: 72, left: "50%", transform: "translateX(-50%)", zIndex: 999, display: "flex", alignItems: "center", gap: 10, background: "#1A1A1A", color: "#F5F2EC", padding: "10px 14px 10px 16px", borderRadius: 12, boxShadow: "0 4px 20px rgba(0,0,0,0.35)", fontSize: 12, whiteSpace: "nowrap" }}>
+                <span>Entry deleted</span>
+                <button onClick={handleUndo} style={{ background: "#F5F2EC", color: "#1A1A1A", border: "none", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>Undo</button>
+              </div>
+            )}
+
             {allowanceKids.map(kid => {
               const data = allowanceData[kid.id] || { balance: 0, history: [] };
               const balance = data.balance || 0;
-              const allHistory = [...(data.history || [])].reverse(); // newest first
-              const lastPayout = [...(data.history || [])].reverse().find(h => h.type === "payout");
-
-              // Show 5 by default, up to 30 when expanded
+              const allHistory = [...(data.history || [])].reverse();
+              const lastPayout = allHistory.find(h => h.type === "payout");
               const showAll = historyExpanded[kid.id];
               const displayHistory = showAll ? allHistory.slice(0, 30) : allHistory.slice(0, 5);
               const hasMore = allHistory.length > 5;
@@ -1985,8 +2135,6 @@ export default function CleaningSchedule() {
 
               return (
                 <div key={kid.id} style={{ margin: "0 14px 18px", background: "#fff", borderRadius: 14, border: "2px solid " + kid.color + "55", overflow: "hidden" }}>
-
-                  {/* Header */}
                   <div style={{ padding: "14px 14px 10px", background: kid.color + "12", borderBottom: "1px solid " + kid.color + "22" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1998,14 +2146,9 @@ export default function CleaningSchedule() {
                         <p style={{ margin: "2px 0 0", fontSize: 9, color: "#AAA" }}>current balance</p>
                       </div>
                     </div>
-                    {lastPayout && (
-                      <p style={{ margin: "8px 0 0", fontSize: 10, color: "#AAA" }}>
-                        Last paid ${lastPayout.amount.toFixed(2)} on {new Date(lastPayout.date).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
-                      </p>
-                    )}
+                    {lastPayout && <p style={{ margin: "8px 0 0", fontSize: 10, color: "#AAA" }}>Last paid ${lastPayout.amount.toFixed(2)} on {new Date(lastPayout.date).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</p>}
                   </div>
 
-                  {/* Payout button — adults only */}
                   {!isKidMode && (
                   <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
                     <button onClick={() => handlePayout(kid)} disabled={balance <= 0} style={{ width: "100%", padding: "9px", background: balance > 0 ? kid.color : "#EEE", color: balance > 0 ? "#fff" : "#BBB", border: "none", borderRadius: 8, cursor: balance > 0 ? "pointer" : "not-allowed", fontFamily: "inherit", fontSize: 12, fontWeight: "bold" }}>
@@ -2014,7 +2157,6 @@ export default function CleaningSchedule() {
                   </div>
                   )}
 
-                  {/* Manual adjustment — adults only */}
                   {!isKidMode && (
                   <div style={{ padding: "10px 14px", borderBottom: "1px solid #F5F2EC" }}>
                     <p style={{ margin: "0 0 8px", fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>Manual Adjustment</p>
@@ -2029,15 +2171,12 @@ export default function CleaningSchedule() {
                   </div>
                   )}
 
-                  {/* Transaction history */}
                   <div>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 14px 4px" }}>
                       <p style={{ margin: 0, fontSize: 10, color: "#AAA", textTransform: "uppercase", letterSpacing: "0.06em" }}>History</p>
                       <p style={{ margin: 0, fontSize: 10, color: "#AAA" }}>{allHistory.length} transaction{allHistory.length !== 1 ? "s" : ""}</p>
                     </div>
-                    {allHistory.length === 0 && (
-                      <p style={{ margin: 0, padding: "10px 14px 14px", fontSize: 12, color: "#CCC", fontStyle: "italic" }}>No transactions yet.</p>
-                    )}
+                    {allHistory.length === 0 && <p style={{ margin: 0, padding: "10px 14px 14px", fontSize: 12, color: "#CCC", fontStyle: "italic" }}>No transactions yet.</p>}
                     {displayHistory.map((entry, i) => {
                       const color = entryColor(entry, kid.color);
                       const isPayout = entry.type === "payout";
@@ -2050,9 +2189,13 @@ export default function CleaningSchedule() {
                             <p style={{ margin: 0, fontSize: 12, color: isPayout ? "#888" : "#1A1A1A", fontStyle: isPayout ? "italic" : "normal" }}>{entry.note}</p>
                             <p style={{ margin: "2px 0 0", fontSize: 10, color: "#AAA" }}>{new Date(entry.date).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</p>
                           </div>
-                          <span style={{ fontSize: 13, fontWeight: "bold", color, flexShrink: 0 }}>
-                            {entrySign(entry)}${entry.amount.toFixed(2)}
-                          </span>
+                          <span style={{ fontSize: 13, fontWeight: "bold", color, flexShrink: 0 }}>{entrySign(entry)}${entry.amount.toFixed(2)}</span>
+                          {!isKidMode && (
+                            <button onClick={() => handleDeleteEntry(kid, i)} title="Delete this entry"
+                              style={{ width: 26, height: 26, borderRadius: "50%", border: "1px solid #EEE", background: "#FAFAF8", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 13, color: "#CCC", transition: "all 0.15s" }}
+                              onMouseEnter={e => { e.currentTarget.style.background="#FDEAED"; e.currentTarget.style.borderColor="#EE8898"; e.currentTarget.style.color="#D4445A"; }}
+                              onMouseLeave={e => { e.currentTarget.style.background="#FAFAF8"; e.currentTarget.style.borderColor="#EEE"; e.currentTarget.style.color="#CCC"; }}>×</button>
+                          )}
                         </div>
                       );
                     })}
@@ -2493,6 +2636,18 @@ export default function CleaningSchedule() {
                   {frequencies.map(freq => {
                     const tasks = getTaskList(editRoom.id, freq);
                     const fmr = freqMeta[freq];
+                    function reorderTasks(fromIndex, toIndex) {
+                      if (fromIndex === toIndex) return;
+                      setCustomTasks(prev => {
+                        const snap = ensureSnapshot(editRoom.id, freq, prev);
+                        const list = [...snap[editRoom.id][freq]];
+                        const [moved] = list.splice(fromIndex, 1);
+                        list.splice(toIndex, 0, moved);
+                        const updated = { ...snap, [editRoom.id]: { ...snap[editRoom.id], [freq]: list } };
+                        saveCustomTasks(updated);
+                        return updated;
+                      });
+                    }
                     return (
                       <div key={freq} style={{ marginBottom:16 }}>
                         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
@@ -2505,46 +2660,18 @@ export default function CleaningSchedule() {
                         </div>
                         {showAddTask && newTaskFreq===freq && editingTask===null && (
                           <EditForm fmr={fmr}
-                            onSave={() => {
-                              if (!newTaskText.trim()) return;
-                              const tgt = newTaskEditFreq;
-                              const updated = (prev => { const snap=ensureSnapshot(editRoom.id,tgt,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[tgt]:[...snap[editRoom.id][tgt],{text:newTaskText.trim(),assignees:newTaskAssignees,time:newTaskTime.trim()}]}}; })(customTasks);
-                              setCustomTasks(updated); saveCustomTasks(updated);
-                              setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
-                            }}
+                            onSave={() => { if (!newTaskText.trim()) return; const tgt=newTaskEditFreq; const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,tgt,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[tgt]:[...snap[editRoom.id][tgt],{text:newTaskText.trim(),assignees:newTaskAssignees,time:newTaskTime.trim()}]}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
                             onCancel={() => { setShowAddTask(false); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
                           />
                         )}
                         {tasks.length===0 && !(showAddTask && newTaskFreq===freq) && <p style={{ fontSize:12, color:"#CCC", fontStyle:"italic", margin:"0 0 4px" }}>No {freq.toLowerCase()} tasks</p>}
-                        {tasks.map((task, i) => (
-                          <div key={i} style={{ marginBottom:5 }}>
-                            {editingTask?.roomId===editRoom.id && editingTask?.freq===freq && editingTask?.index===i ? (
-                              <EditForm fmr={fmr}
-                                onSave={() => {
-                                  if (!newTaskText.trim()) return;
-                                  const tgt = newTaskEditFreq;
-                                  let updated = (prev => { const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks);
-                                  updated = (prev => { const snap=ensureSnapshot(editRoom.id,tgt,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[tgt]:[...snap[editRoom.id][tgt],{text:newTaskText.trim(),assignees:newTaskAssignees,time:newTaskTime.trim()}]}}; })(updated);
-                                  setCustomTasks(updated); saveCustomTasks(updated);
-                                  setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime("");
-                                }}
-                                onCancel={() => { setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
-                              />
-                            ) : (
-                              <div style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"9px 12px", background:"#fff", border:"1px solid #E4E0D8", borderRadius:10 }}>
-                                <div style={{ flex:1, minWidth:0 }}>
-                                  <p style={{ margin:0, fontSize:13, color:"#1A1A1A" }}>{task.text}</p>
-                                  <div style={{ display:"flex", gap:6, marginTop:4, flexWrap:"wrap", alignItems:"center" }}>
-                                    {task.assignees?.length > 0 && task.assignees.map(aid => { const m=FAMILY.find(f=>f.id===aid); return m?<Avatar key={aid} member={m} size={16} fontSize={8} />:null; })}
-                                    {task.time && <span style={{ fontSize:10, color:"#AAA", background:"#F5F2EC", padding:"1px 6px", borderRadius:6 }}>~{task.time}</span>}
-                                  </div>
-                                </div>
-                                <button onClick={() => { setEditingTask({roomId:editRoom.id,freq,index:i}); setNewTaskText(task.text); setNewTaskAssignees(task.assignees||[]); setNewTaskTime(task.time||""); setNewTaskEditFreq(freq); setShowAddTask(false); }} style={{ fontSize:11, color:"#AAA", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Edit</button>
-                                <button onClick={() => { const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }} style={{ fontSize:11, color:"#D47F6B", background:"none", border:"none", cursor:"pointer", padding:"4px 6px", flexShrink:0 }}>Delete</button>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                        <DraggableTaskList tasks={tasks} freq={freq} editRoom={editRoom} editingTask={editingTask} fmr={fmr} onReorder={reorderTasks}
+                          onEdit={(i) => { setEditingTask({roomId:editRoom.id,freq,index:i}); setNewTaskText(tasks[i].text); setNewTaskAssignees(tasks[i].assignees||[]); setNewTaskTime(tasks[i].time||""); setNewTaskEditFreq(freq); setShowAddTask(false); }}
+                          onDelete={(i) => { const updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); setCustomTasks(updated); saveCustomTasks(updated); }}
+                          EditForm={EditForm}
+                          onSaveEdit={(i) => { if (!newTaskText.trim()) return; const tgt=newTaskEditFreq; let updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,freq,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[freq]:snap[editRoom.id][freq].filter((_,idx)=>idx!==i)}}; })(customTasks); updated=(prev=>{ const snap=ensureSnapshot(editRoom.id,tgt,prev); return {...snap,[editRoom.id]:{...snap[editRoom.id],[tgt]:[...snap[editRoom.id][tgt],{text:newTaskText.trim(),assignees:newTaskAssignees,time:newTaskTime.trim()}]}}; })(updated); setCustomTasks(updated); saveCustomTasks(updated); setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
+                          onCancelEdit={() => { setEditingTask(null); setNewTaskText(""); setNewTaskAssignees([]); setNewTaskTime(""); }}
+                        />
                       </div>
                     );
                   })}
