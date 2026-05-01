@@ -592,7 +592,7 @@ const selectStyle = {
 const labelStyle = { fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 4px", display: "block" };
 
 // ─── STATUS VIEW COMPONENT ────────────────────────────────────────────────────
-function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels, expandedCard, setExpandedCard, Avatar, RoomIcon, FAMILY }) {
+function StatusView({ completions, allArchiveData, getTaskList, getVisibleTasks, allRooms, levels, expandedCard, setExpandedCard, Avatar, RoomIcon, FAMILY }) {
   const now = new Date();
 
   // Time boundaries
@@ -2097,11 +2097,11 @@ export default function CleaningSchedule() {
         );
       })()}
 
-      {/* ═══ STATUS VIEW ═══ */}
       {view === "status" && <StatusView
         completions={completions}
         allArchiveData={allArchiveData}
         getTaskList={getTaskList}
+        getVisibleTasks={getVisibleTasks}
         allRooms={allRooms}
         levels={levels}
         expandedCard={expandedCard}
