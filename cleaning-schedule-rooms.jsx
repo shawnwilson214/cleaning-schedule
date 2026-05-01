@@ -633,8 +633,20 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
 
   // ── Helper: count completed tasks for a given freq + period key ──
   // Checks both the archive AND live completions (in case the period hasn't been pruned yet)
+  // Only counts tasks that are visible to parents (excludes kid-only tasks)
   function countDoneForPeriod(freq, periodKey) {
     const seen = new Set();
+    const kidIds = FAMILY.filter(f => f.isKid).map(f => f.id);
+
+    function isKidOnlyTask(room, taskIndex, freq) {
+      const tasks = getTaskList(room.id, freq);
+      const task = tasks[taskIndex];
+      if (!task) return false;
+      const nameTag = task.text.match(/\((\w+)\)$/);
+      if (nameTag) return true;
+      if (task.assignees?.length > 0 && task.assignees.every(aid => kidIds.includes(aid))) return true;
+      return false;
+    }
 
     function scanObj(obj) {
       Object.entries(obj).forEach(([key, c]) => {
@@ -646,6 +658,7 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
         const afterFreq = afterRoom.slice(freq.length + 1);
         const taskIndex = parseInt(afterFreq.split("-")[0]);
         if (isNaN(taskIndex)) return;
+        if (isKidOnlyTask(room, taskIndex, freq)) return;
         seen.add(room.id + "-" + freq + "-" + taskIndex);
       });
     }
@@ -658,10 +671,10 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
     return seen.size;
   }
 
-  // ── Total tasks per frequency (static — doesn't change by period) ──
+  // ── Total tasks per frequency — excludes kid-only tasks (parent view) ──
   function totalForFreq(freq) {
     let t = 0;
-    allRooms.forEach(room => { t += getTaskList(room.id, freq).length; });
+    allRooms.forEach(room => { t += getVisibleTasks(room.id, freq).length; });
     return t;
   }
 
@@ -768,8 +781,11 @@ function StatusView({ completions, allArchiveData, getTaskList, allRooms, levels
       lv.rooms.forEach(room => {
         let rTotal = 0, rDone = 0;
         freqList.forEach(freq => {
-          const tasks = getTaskList(room.id, freq);
-          tasks.forEach((t, i) => {
+          const tasks = getVisibleTasks(room.id, freq);
+          // Map visible tasks back to their original index for completion key lookup
+          const allTasks = getTaskList(room.id, freq);
+          tasks.forEach(t => {
+            const i = allTasks.indexOf(t);
             rTotal++;
             const baseKey = room.id + "-" + freq + "-" + i;
             if (completionMap[baseKey]) rDone++;
@@ -1154,15 +1170,13 @@ export default function CleaningSchedule() {
   const isKidMode = activeMember.isKid;
   const fm = freqMeta[activeFreq];
 
-  // ── Kid visibility: own room always visible; other rooms only if explicitly assigned ──
+  // ── Kid visibility: only show tasks explicitly assigned to this kid ──
   function isVisibleToKid(task, roomId, member) {
     if (!member.isKid) return true;
     // Tasks with "(Name)" suffix are auto-assigned to that kid only
     const nameTag = task.text.match(/\((\w+)\)$/);
     if (nameTag) return nameTag[1].toLowerCase() === member.name.toLowerCase();
-    // Always show all tasks in their own bedroom
-    if (roomId === member.ownRoomId) return true;
-    // Show tasks elsewhere only if explicitly assigned
+    // In all rooms (including their own bedroom), only show if explicitly assigned
     return (task.assignees || []).includes(member.id);
   }
 
