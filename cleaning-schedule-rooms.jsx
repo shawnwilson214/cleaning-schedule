@@ -795,10 +795,10 @@ function StatusView({ completions, allArchiveData, getTaskList, getVisibleTasks,
           // Map visible tasks back to their original index for completion key lookup
           const allTasks = getTaskList(room.id, freq);
           tasks.forEach(t => {
-            const i = allTasks.indexOf(t);
+            const i = allTasks.findIndex(ft => ft.text === t.text);
             rTotal++;
             const baseKey = room.id + "-" + freq + "-" + i;
-            if (completionMap[baseKey]) rDone++;
+            if (i !== -1 && completionMap[baseKey]) rDone++;
           });
         });
         if (rTotal > 0) byRoom[room.id] = { name: room.name, icon: room.icon, total: rTotal, done: rDone, levelColor: lv.color };
