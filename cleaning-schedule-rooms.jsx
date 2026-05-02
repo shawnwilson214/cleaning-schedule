@@ -610,23 +610,33 @@ function StatusView({ completions, allArchiveData, getTaskList, getVisibleTasks,
     if (freq === "Daily") return { from: todayStart.getTime(), to: todayEnd.getTime() };
     if (freq === "Weekly") return { from: weekStart.getTime(), to: weekEnd.getTime() };
     if (freq === "Monthly") return { from: monthStart.getTime(), to: monthEnd.getTime() };
+    if (freq === "Quarterly") {
+      const qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+      const qStart = new Date(now.getFullYear(), qStartMonth, 1);
+      const qEnd = new Date(now.getFullYear(), qStartMonth + 3, 0, 23, 59, 59, 999);
+      return { from: qStart.getTime(), to: qEnd.getTime() };
+    }
     return { from: yearStart.getTime(), to: yearEnd.getTime() };
   }
 
   // Build completion lookup for current period progress bars
   const completionMap = {};
   Object.entries(completions).forEach(([key, c]) => {
-    if (!c || !c.at || !c.freq) return;
+    if (!c || !c.freq) return;
     const room = allRooms.find(r => key.startsWith(r.id + "-"));
     if (!room) return;
     const afterRoom = key.slice(room.id.length + 1);
     const afterFreq = afterRoom.slice(c.freq.length + 1);
     const taskIndex = parseInt(afterFreq.split("-")[0]);
     if (isNaN(taskIndex)) return;
-    const win = windowForFreq(c.freq);
-    if (c.at < win.from || c.at > win.to) return;
+    // Match by periodKey string (primary) OR by timestamp window (fallback)
+    const currentPeriodKey = getPeriodKey(c.freq);
+    const inCurrentPeriod = c.periodKey
+      ? c.periodKey === currentPeriodKey
+      : (c.at && (() => { const win = windowForFreq(c.freq); return c.at >= win.from && c.at <= win.to; })());
+    if (!inCurrentPeriod) return;
     const baseKey = room.id + "-" + c.freq + "-" + taskIndex;
-    if (!completionMap[baseKey] || c.at > completionMap[baseKey].at) {
+    if (!completionMap[baseKey] || (c.at && (!completionMap[baseKey].at || c.at > completionMap[baseKey].at))) {
       completionMap[baseKey] = c;
     }
   });
